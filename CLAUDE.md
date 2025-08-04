@@ -1,7 +1,7 @@
-# Mergeria - Architecture Documentation
+# Towers of Mergethorne - Architecture Documentation
 
 ## Game Overview
-Mergeria is a hybrid bubble shooter + tower defense game for Playdate. Players alternate between bubble shooting phases and tower defense phases across 3 levels.
+Towers of Mergethorne is a hybrid bubble shooter + tower defense game for Playdate. Players alternate between bubble shooting phases and tower defense phases across 3 levels.
 
 ### Game Flow
 1. **Main Menu**: Simple menu with "Play" option
@@ -59,10 +59,11 @@ source/
 - [x] Main menu with navigation
 - [x] Basic file structure
 
-### Phase 2: Bubble Shooter Core
-- [ ] Grid collision and placement
-- [ ] Bubble shooting mechanics
-- [ ] Merge detection and logic
+### Phase 2: Bubble Shooter Core ✓
+- [x] Grid collision and placement
+- [x] Bubble shooting mechanics with preview system
+- [x] Merge detection and logic
+- [x] Starting array generation (optimized placement)
 - [ ] Level progression
 
 ### Phase 3: Tower Defense Core  
@@ -87,7 +88,7 @@ source/
 
 ### Input Handling
 - Menu: D-pad navigation, A to select
-- Bubble phase: Up/Down for aiming, A to shoot
+- Bubble phase: Up/Down for aiming, Crank for vertical shooter movement, A to shoot
 - Tower phase: Passive observation
 
 ### Memory Management
@@ -107,4 +108,10 @@ Screenshots are stored in `.sshots/` directory for development reference in .png
 - Future screenshots can be added and will be accessible for development guidance
 
 ## Current Status
-Hex grid system implemented. Updating proportions and spacing to match prototype design. Ready to refine visual layout and implement core bubble shooter mechanics.
+Bubble shooter core mechanics completed with preview ball system. Starting array generation optimized to prevent 3-matches while maximizing 2-matches. Shooter positioned with 2-ball preview system showing current and next bubbles. Crank controls vertical shooter movement. Ready for tower defense phase implementation.
+
+## Recent Implementations
+- **Starting Array Logic**: Leftmost 3 columns (rows 2-7) plus rows 1 & 8 (positions 1-6) with intelligent bubble placement
+- **Preview Ball System**: Main shooter ball with preview ball showing next shot, positioned to avoid overlap
+- **Merge Prevention**: Algorithm ensures no 3-matches exist in starting layout while optimizing 2-matches
+- **Shooter Controls**: Crank for vertical movement, D-pad for angle adjustment, A button to shoot

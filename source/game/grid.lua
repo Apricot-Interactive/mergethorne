@@ -13,14 +13,23 @@ function Grid:new()
         hexSpacingY = Constants and Constants.HEX_SPACING_Y or 20,
         hexOffsetX = Constants and Constants.HEX_OFFSET_X or 12,
         shooterX = Constants and Constants.SHOOTER_X or 350,
+        baseShooterY = Constants and Constants.SHOOTER_Y or 120,
         shooterY = Constants and Constants.SHOOTER_Y or 120,
         boundaryX = Constants and Constants.BOUNDARY_X or 300,
+        -- Crank tracking
+        crankTotal = 0,
+        minShooterY = 20,
+        maxShooterY = 220,
         aimAngle = 180,
         projectile = nil,
         gameOver = false,
         shotsRemaining = 10,
         nextBubbleType = math.random(1, 5),
+        previewBubbleType = math.random(1, 5),
         bubbleSprites = {},
+        -- Animation state for preview ball
+        previewScale = 1.0,
+        previewAnimating = false,
         -- Cached boundary calculations
         leftBoundaryX = 0,
         topBoundaryY = 0,
@@ -81,6 +90,16 @@ function Grid:drawBubbleByType(x, y, bubbleType)
     end
 end
 
+function Grid:drawScaledBubbleByType(x, y, bubbleType, scale)
+    if bubbleType and bubbleType >= 1 and bubbleType <= 10 and self.bubbleSprites[bubbleType] then
+        -- Draw sprite scaled and centered at x, y
+        self.bubbleSprites[bubbleType]:drawScaled(x - 15 * scale, y - 15 * scale, scale)
+    else
+        -- Fallback to scaled circle if sprite not available
+        playdate.graphics.drawCircleAtPoint(x, y, self.bubbleRadius * scale)
+    end
+end
+
 function Grid:updateBoundaryCache()
     -- Calculate and cache all boundary positions
     local leftmostX, _ = self:gridToScreen(1, 1)
@@ -95,7 +114,15 @@ function Grid:updateBoundaryCache()
 end
 
 function Grid:getShooterPosition()
-    return self.rightBoundaryX + 25, self.shooterY
+    -- Position shooter ball so outer edge has 2px buffer from dashed line
+    return self.rightBoundaryX + self.bubbleRadius + 2, self.shooterY
+end
+
+function Grid:getPreviewPosition()
+    local shooterX, shooterY = self:getShooterPosition()
+    -- Preview ball positioned so it doesn't overlap with shooter ball
+    -- Place it far enough right so their edges don't intersect (2 * bubbleRadius + gap)
+    return shooterX + (self.bubbleRadius * 2) + 5, shooterY + 25
 end
 
 function Grid:initGrid()
@@ -151,18 +178,101 @@ end
 function Grid:setupLevel(level)
     self:initGrid()
     
-    -- Only place circles in leftmost 4 columns, only in top 6 rows (safe from game over)
-    for y = 1, 6 do  -- Only top 6 rows to avoid immediate game over
-        for x = 1, 4 do  -- Only leftmost 4 columns (removed first column)
-            if math.random() < 0.6 then  -- 60% chance for gaps
-                self.cells[x][y] = {
-                    type = math.random(1, 5),
-                    x = x,
-                    y = y
+    -- Define placement areas
+    local placementCells = {}
+    
+    -- Leftmost 3 columns (all rows 2-7 to avoid game over)
+    for y = 2, 7 do
+        for x = 1, 3 do
+            table.insert(placementCells, {x = x, y = y, fillChance = x == 3 and 0.5 or 1.0})
+        end
+    end
+    
+    -- Row 1 and row 8, positions 1-6
+    for x = 1, 6 do
+        table.insert(placementCells, {x = x, y = 1, fillChance = 1.0})
+        table.insert(placementCells, {x = x, y = 8, fillChance = 1.0})
+    end
+    
+    -- Place bubbles one by one, ensuring no 3-matches are created
+    for _, cell in ipairs(placementCells) do
+        if math.random() < cell.fillChance then
+            local bubbleType = self:findSafeBubbleType(cell.x, cell.y)
+            if bubbleType then
+                self.cells[cell.x][cell.y] = {
+                    type = bubbleType,
+                    x = cell.x,
+                    y = cell.y
                 }
             end
         end
     end
+end
+
+function Grid:findSafeBubbleType(x, y)
+    -- Try bubble types in random order to add variety
+    local types = {1, 2, 3, 4, 5}
+    for i = #types, 2, -1 do
+        local j = math.random(i)
+        types[i], types[j] = types[j], types[i]
+    end
+    
+    local bestType = nil
+    local bestScore = -1
+    
+    for _, bubbleType in ipairs(types) do
+        -- Test if this type would create a 3-match
+        self.cells[x][y] = {type = bubbleType, x = x, y = y}
+        local neighbors = self:getSameTypeNeighbors(x, y, bubbleType)
+        local wouldCreate3Match = #neighbors >= 3
+        self.cells[x][y] = nil  -- Remove test bubble
+        
+        if not wouldCreate3Match then
+            -- Calculate how many 2-matches this would create
+            local score = self:calculateMatchScore(x, y, bubbleType)
+            if score > bestScore then
+                bestScore = score
+                bestType = bubbleType
+            end
+        end
+    end
+    
+    return bestType
+end
+
+function Grid:calculateMatchScore(x, y, bubbleType)
+    local score = 0
+    local neighbors = self:getDirectNeighbors(x, y)
+    
+    -- Count how many neighbors would match this type
+    for _, neighbor in ipairs(neighbors) do
+        if self.cells[neighbor.x] and self.cells[neighbor.x][neighbor.y] and 
+           self.cells[neighbor.x][neighbor.y].type == bubbleType then
+            score = score + 1
+        end
+    end
+    
+    return score
+end
+
+function Grid:getDirectNeighbors(x, y)
+    local neighbors = {}
+    local directions
+    
+    if y % 2 == 1 then  -- Odd rows
+        directions = {{0,1}, {0,-1}, {1,0}, {-1,0}, {-1,-1}, {-1,1}}
+    else  -- Even rows
+        directions = {{0,1}, {0,-1}, {1,0}, {-1,0}, {1,-1}, {1,1}}
+    end
+    
+    for _, dir in ipairs(directions) do
+        local nx, ny = x + dir[1], y + dir[2]
+        if nx >= 1 and nx <= self.width and ny >= 1 and ny <= self.height then
+            table.insert(neighbors, {x = nx, y = ny})
+        end
+    end
+    
+    return neighbors
 end
 
 function Grid:shootBubble()
@@ -181,17 +291,48 @@ function Grid:shootBubble()
     }
     
     
+    -- Start preview ball animation
+    self.previewAnimating = true
+    
     -- Generate next bubble (don't decrement shots until projectile lands)
-    self.nextBubbleType = math.random(1, 5)
+    self.nextBubbleType = self.previewBubbleType
+    self.previewBubbleType = math.random(1, 5)
     
     return true
 end
 
 function Grid:update()
-    if playdate.buttonIsPressed(playdate.kButtonUp) then
-        self.aimAngle = math.max(135, self.aimAngle - 2)
-    elseif playdate.buttonIsPressed(playdate.kButtonDown) then
-        self.aimAngle = math.min(225, self.aimAngle + 2)
+    -- Handle crank input for shooter vertical movement
+    local crankChange = playdate.getCrankChange()
+    if crankChange ~= 0 then
+        self.crankTotal = self.crankTotal + crankChange
+        
+        -- Convert crank rotation to Y position (720° total range = 200px movement)
+        local movementRange = self.maxShooterY - self.minShooterY
+        local yOffset = (self.crankTotal / 720) * movementRange
+        self.shooterY = self.baseShooterY + yOffset
+        
+        -- Clamp position and adjust crankTotal to prevent drift
+        if self.shooterY < self.minShooterY then
+            self.shooterY = self.minShooterY
+            self.crankTotal = ((self.minShooterY - self.baseShooterY) / movementRange) * 720
+        elseif self.shooterY > self.maxShooterY then
+            self.shooterY = self.maxShooterY
+            self.crankTotal = ((self.maxShooterY - self.baseShooterY) / movementRange) * 720
+        end
+    end
+    
+    -- Handle D-pad aiming
+    if playdate.buttonIsPressed(playdate.kButtonDown) then
+        self.aimAngle = math.max(110, self.aimAngle - 2)
+    elseif playdate.buttonIsPressed(playdate.kButtonUp) then
+        self.aimAngle = math.min(250, self.aimAngle + 2)
+    end
+    
+    -- Handle preview ball animation when shot is fired
+    if self.previewAnimating then
+        -- Simple animation - just turn off after a few frames
+        self.previewAnimating = false
     end
     
     if self.projectile then
@@ -205,15 +346,15 @@ function Grid:update()
             self.projectile.vx = -self.projectile.vx
         end
         
-        -- Top boundary bounce
-        if self.projectile.y - self.bubbleRadius <= self.topBoundaryY then
-            self.projectile.y = self.topBoundaryY + self.bubbleRadius
+        -- Top boundary bounce (screen edge)
+        if self.projectile.y - self.bubbleRadius <= 0 then
+            self.projectile.y = self.bubbleRadius
             self.projectile.vy = -self.projectile.vy
         end
         
-        -- Bottom boundary bounce
-        if self.projectile.y + self.bubbleRadius >= self.bottomBoundaryY then
-            self.projectile.y = self.bottomBoundaryY - self.bubbleRadius
+        -- Bottom boundary bounce (screen edge)
+        if self.projectile.y + self.bubbleRadius >= 240 then
+            self.projectile.y = 240 - self.bubbleRadius
             self.projectile.vy = -self.projectile.vy
         end
         
@@ -323,15 +464,29 @@ function Grid:checkMerges(x, y)
     local neighbors = self:getSameTypeNeighbors(x, y, bubble.type)
     
     if #neighbors >= 3 then
+        -- Find leftmost position for super cell (with tie-breaker for last shot row)
+        local leftmostX = math.huge
+        local leftmostY = nil
+        local lastShotRow = y  -- The row where the last shot landed
+        
+        for _, pos in ipairs(neighbors) do
+            if pos.x < leftmostX or (pos.x == leftmostX and pos.y == lastShotRow) then
+                leftmostX = pos.x
+                leftmostY = pos.y
+            end
+        end
+        
+        -- Clear all merged cells
         for _, pos in ipairs(neighbors) do
             self.cells[pos.x][pos.y] = nil
         end
         
+        -- Place super cell at leftmost position (basic bubbles only)
         if bubble.type <= 5 then
-            self.cells[x][y] = {
+            self.cells[leftmostX][leftmostY] = {
                 type = bubble.type + 5,
-                x = x,
-                y = y
+                x = leftmostX,
+                y = leftmostY
             }
         end
     end
@@ -392,11 +547,9 @@ end
 function Grid:draw()
     local gfx = playdate.graphics
     
-    -- Draw boundary lines using cached values
-    self:drawDashedLine(gfx, self.rightBoundaryX, self.topBoundaryY, self.rightBoundaryX, self.bottomBoundaryY)  -- Right boundary
-    gfx.drawLine(self.leftBoundaryX, self.topBoundaryY, self.rightBoundaryX, self.topBoundaryY)  -- Top boundary
-    gfx.drawLine(self.leftBoundaryX, self.bottomBoundaryY, self.rightBoundaryX, self.bottomBoundaryY)  -- Bottom boundary
-    gfx.drawLine(self.leftBoundaryX, self.topBoundaryY, self.leftBoundaryX, self.bottomBoundaryY)  -- Left boundary
+    -- Draw boundary lines - left and right edges extend full screen height
+    self:drawDashedLine(gfx, self.rightBoundaryX, 0, self.rightBoundaryX, 240)  -- Right boundary (full height)
+    gfx.drawLine(self.leftBoundaryX, 0, self.leftBoundaryX, 240)  -- Left boundary (full height)
     
     -- Draw bubbles in hex grid
     for x = 1, self.width do
@@ -415,20 +568,30 @@ function Grid:draw()
     end
     
     local shooterX, shooterY = self:getShooterPosition()
+    local previewX, previewY = self:getPreviewPosition()
     
     -- Draw ready-to-fire ball at shooter position
     if not self.projectile and self.shotsRemaining > 0 then
         self:drawBubbleByType(shooterX, shooterY, self.nextBubbleType)
     end
     
-    -- Draw shots remaining below the shooter ball
-    gfx.drawTextAligned(tostring(self.shotsRemaining), shooterX, shooterY + self.bubbleRadius + 10, kTextAlignment.center)
+    -- Draw preview ball (next bubble to be shot)
+    if not self.projectile and self.shotsRemaining > 0 then
+        self:drawBubbleByType(previewX, previewY, self.previewBubbleType)
+    end
+    
+    -- Draw shots remaining below the preview ball
+    gfx.drawTextAligned(tostring(self.shotsRemaining), previewX, previewY + self.bubbleRadius + 10, kTextAlignment.center)
     
     -- Draw aim line from shooter position (only if not fired)
     if not self.projectile then
-        gfx.drawLine(shooterX, shooterY, 
-                     shooterX + math.cos(math.rad(self.aimAngle)) * 30,
-                     shooterY + math.sin(math.rad(self.aimAngle)) * 30)
+        -- Start line from edge of circle and extend 60px
+        local startX = shooterX + math.cos(math.rad(self.aimAngle)) * self.bubbleRadius
+        local startY = shooterY + math.sin(math.rad(self.aimAngle)) * self.bubbleRadius
+        local endX = shooterX + math.cos(math.rad(self.aimAngle)) * (self.bubbleRadius + 60)
+        local endY = shooterY + math.sin(math.rad(self.aimAngle)) * (self.bubbleRadius + 60)
+        
+        gfx.drawLine(startX, startY, endX, endY)
     end
 end
 

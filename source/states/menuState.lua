@@ -30,7 +30,7 @@ function MenuState:draw()
     local gfx = playdate.graphics
     gfx.clear()
     
-    gfx.drawTextAligned("MERGERIA", 200, 60, kTextAlignment.center)
+    gfx.drawTextAligned("TOWERS OF MERGETHORNE", 200, 60, kTextAlignment.center)
     
     local y = 120
     for i, option in ipairs(self.options) do
