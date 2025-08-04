@@ -30,6 +30,8 @@ function Grid:new()
         -- Animation state for preview ball
         previewScale = 1.0,
         previewAnimating = false,
+        -- Flip state for UI elements when shooter is too low
+        uiFlipped = false,
         -- Cached boundary calculations
         leftBoundaryX = 0,
         topBoundaryY = 0,
@@ -120,9 +122,14 @@ end
 
 function Grid:getPreviewPosition()
     local shooterX, shooterY = self:getShooterPosition()
-    -- Preview ball positioned so it doesn't overlap with shooter ball
-    -- Place it far enough right so their edges don't intersect (2 * bubbleRadius + gap)
-    return shooterX + (self.bubbleRadius * 2) + 5, shooterY + 25
+    
+    if self.uiFlipped then
+        -- When flipped, position preview ball above and behind shooter
+        return shooterX + (self.bubbleRadius * 2) + 5 - 11, shooterY - 25
+    else
+        -- Normal position: below and behind shooter, moved 11px left total
+        return shooterX + (self.bubbleRadius * 2) + 5 - 11, shooterY + 25
+    end
 end
 
 function Grid:initGrid()
@@ -207,6 +214,64 @@ function Grid:setupLevel(level)
             end
         end
     end
+end
+
+function Grid:setupLevelWithMergedBalls(level, survivingMergedBalls)
+    self:initGrid()
+    
+    print("=== Setting up level with pre-existing merged balls ===")
+    
+    -- First, place the surviving merged balls
+    for _, ballData in ipairs(survivingMergedBalls) do
+        if ballData.x >= 1 and ballData.x <= self.width and ballData.y >= 1 and ballData.y <= self.height then
+            self.cells[ballData.x][ballData.y] = {
+                type = ballData.type,
+                x = ballData.x,
+                y = ballData.y,
+                isPreExisting = true -- Mark as pre-existing merged ball
+            }
+            print("Placed surviving merged ball: Type " .. ballData.type .. " at grid (" .. ballData.x .. "," .. ballData.y .. ")")
+        end
+    end
+    
+    -- Then setup new basic balls, avoiding positions where merged balls already exist
+    local placementCells = {}
+    
+    -- Leftmost 3 columns (all rows 2-7 to avoid game over)
+    for y = 2, 7 do
+        for x = 1, 3 do
+            if not self.cells[x][y] then -- Only add if position is empty
+                table.insert(placementCells, {x = x, y = y, fillChance = x == 3 and 0.5 or 1.0})
+            end
+        end
+    end
+    
+    -- Row 1 and row 8, positions 1-6
+    for x = 1, 6 do
+        if not self.cells[x][1] then -- Only add if position is empty
+            table.insert(placementCells, {x = x, y = 1, fillChance = 1.0})
+        end
+        if not self.cells[x][8] then -- Only add if position is empty
+            table.insert(placementCells, {x = x, y = 8, fillChance = 1.0})
+        end
+    end
+    
+    -- Place new basic bubbles one by one, ensuring no 3-matches are created
+    for _, cell in ipairs(placementCells) do
+        if math.random() < cell.fillChance then
+            local bubbleType = self:findSafeBubbleType(cell.x, cell.y)
+            if bubbleType then
+                self.cells[cell.x][cell.y] = {
+                    type = bubbleType,
+                    x = cell.x,
+                    y = cell.y,
+                    isPreExisting = false -- Mark as new basic ball
+                }
+            end
+        end
+    end
+    
+    print("=== Level setup complete with " .. #survivingMergedBalls .. " pre-existing merged balls ===")
 end
 
 function Grid:findSafeBubbleType(x, y)
@@ -301,6 +366,18 @@ function Grid:shootBubble()
     return true
 end
 
+function Grid:shouldFlipUI()
+    -- Check if the shooting apparatus would cause shot counter to go off bottom of screen
+    local _, shooterY = self:getShooterPosition()
+    local previewY = shooterY + 25  -- preview ball position
+    local currentFont = playdate.graphics.getFont()
+    local textHeight = currentFont:getHeight()
+    local gap = 8
+    local shotCounterY = previewY + self.bubbleRadius + gap
+    local textBottomY = shotCounterY + textHeight
+    return textBottomY > 240
+end
+
 function Grid:update()
     -- Handle crank input for shooter vertical movement
     local crankChange = playdate.getCrankChange()
@@ -321,6 +398,9 @@ function Grid:update()
             self.crankTotal = ((self.maxShooterY - self.baseShooterY) / movementRange) * 720
         end
     end
+    
+    -- Update UI flip state based on shooter position
+    self.uiFlipped = self:shouldFlipUI()
     
     -- Handle D-pad aiming
     if playdate.buttonIsPressed(playdate.kButtonDown) then
@@ -385,8 +465,8 @@ function Grid:checkProjectileCollision()
                 local bubbleX, bubbleY = self:gridToScreen(x, y)
                 local distance = math.sqrt((self.projectile.x - bubbleX)^2 + (self.projectile.y - bubbleY)^2)
                 
-                -- If projectile is close enough to an existing bubble (reduced hitbox by 2px)
-                if distance <= (self.bubbleRadius * 2) - 2 then
+                -- If projectile is close enough to an existing bubble (reduced hitbox by 5px for easier navigation)
+                if distance <= (self.bubbleRadius * 2) - 5 then
                     -- Find the best empty spot to place the new bubble
                     local bestX, bestY = self:findClosestEmptySpot(self.projectile.x, self.projectile.y)
                     
@@ -544,7 +624,10 @@ function Grid:checkGameOver()
     return false
 end
 
-function Grid:draw()
+function Grid:draw(showNewBubbles, transitionState, shotsRemaining)
+    if showNewBubbles == nil then showNewBubbles = true end -- Default to showing all bubbles
+    if transitionState == nil then transitionState = "playing" end -- Default to normal play
+    if shotsRemaining == nil then shotsRemaining = self.shotsRemaining end -- Use grid's shots if not provided
     local gfx = playdate.graphics
     
     -- Draw boundary lines - left and right edges extend full screen height
@@ -556,8 +639,11 @@ function Grid:draw()
         for y = 1, self.height do
             local bubble = self.cells[x][y]
             if bubble then
-                local drawX, drawY = self:gridToScreen(x, y)
-                self:drawBubbleByType(drawX, drawY, bubble.type)
+                -- Only draw if it's a pre-existing bubble, or if we should show new bubbles
+                if bubble.isPreExisting or showNewBubbles then
+                    local drawX, drawY = self:gridToScreen(x, y)
+                    self:drawBubbleByType(drawX, drawY, bubble.type)
+                end
             end
         end
     end
@@ -580,11 +666,22 @@ function Grid:draw()
         self:drawBubbleByType(previewX, previewY, self.previewBubbleType)
     end
     
-    -- Draw shots remaining below the preview ball
-    gfx.drawTextAligned(tostring(self.shotsRemaining), previewX, previewY + self.bubbleRadius + 10, kTextAlignment.center)
+    -- Draw shots remaining with proper edge-to-edge spacing
+    local currentFont = gfx.getFont()
+    local textHeight = currentFont:getHeight()
+    local gap = 8  -- Visual gap between ball edge and text edge
+    local shotCounterY
+    if self.uiFlipped then
+        -- Flipped: text above ball, measure from ball top edge to text bottom edge
+        shotCounterY = previewY - self.bubbleRadius - gap - textHeight
+    else
+        -- Normal: text below ball, measure from ball bottom edge to text top edge  
+        shotCounterY = previewY + self.bubbleRadius + gap
+    end
+    gfx.drawTextAligned(tostring(shotsRemaining), previewX, shotCounterY, kTextAlignment.center)
     
-    -- Draw aim line from shooter position (only if not fired)
-    if not self.projectile then
+    -- Draw aim line from shooter position (only if not fired, in normal play mode, and shots remaining)
+    if not self.projectile and transitionState == "playing" and shotsRemaining > 0 then
         -- Start line from edge of circle and extend 60px
         local startX = shooterX + math.cos(math.rad(self.aimAngle)) * self.bubbleRadius
         local startY = shooterY + math.sin(math.rad(self.aimAngle)) * self.bubbleRadius

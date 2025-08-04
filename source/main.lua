@@ -37,6 +37,12 @@ function GameManager:setState(stateName, data)
         end
     end
     
+    -- Clear game data when returning to menu for fresh start
+    if stateName == "menu" then
+        print("=== Returning to menu - clearing all game data ===")
+        self.gameData = {}
+    end
+    
     self.currentState = self.states[stateName]
     if self.currentState then
         local dataToPass = data or self.gameData

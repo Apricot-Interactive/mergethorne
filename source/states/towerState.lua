@@ -20,7 +20,18 @@ function TowerState:enter(gameData)
     self.baseHp = 100
     
     self.towers = Towers:new()
-    self.towers:convertFromGrid(gameData.grid)
+    
+    -- Pass bubble sprites from the grid to towers system
+    if gameData.grid and gameData.grid.bubbleSprites then
+        self.towers.bubbleSprites = gameData.grid.bubbleSprites
+    end
+    
+    if gameData.mergedBallData then
+        self.towers:convertFromMergedBalls(gameData.mergedBallData)
+    else
+        -- Fallback to old method if no merged ball data available
+        self.towers:convertFromGrid(gameData.grid)
+    end
     
     self.creeps = Creeps:new()
     self.creeps:startWave(self.level)
@@ -58,13 +69,39 @@ function TowerState:draw()
     self.towers:draw()
     self.creeps:draw()
     
-    gfx.drawTextAligned("HP: " .. self.baseHp, 50, 10, kTextAlignment.left)
-    gfx.drawTextAligned("Level: " .. self.level, 350, 10, kTextAlignment.right)
+    -- UI elements hidden for cleaner tower defense experience
+    -- gfx.drawTextAligned("HP: " .. self.baseHp, 50, 10, kTextAlignment.left)
+    -- gfx.drawTextAligned("Level: " .. self.level, 350, 10, kTextAlignment.right)
 end
 
 function TowerState:getGameData()
     return {
-        level = self.level + 1
+        level = self.level + 1,
+        survivingMergedBalls = self:getSurvivingMergedBalls()
     }
 end
+
+function TowerState:getSurvivingMergedBalls()
+    -- Convert current tower positions back to merged ball data for next bubble phase
+    local survivingBalls = {}
+    
+    print("=== Collecting surviving merged balls ===")
+    for _, tower in ipairs(self.towers.towers) do
+        if tower.originalBallType and tower.gridX and tower.gridY then
+            -- Use the precise stored grid coordinates
+            table.insert(survivingBalls, {
+                x = tower.gridX,
+                y = tower.gridY,
+                type = tower.originalBallType,
+                screenX = tower.x,
+                screenY = tower.y
+            })
+            print("Preserving merged ball: Type " .. tower.originalBallType .. " at grid (" .. tower.gridX .. "," .. tower.gridY .. ") screen (" .. tower.x .. "," .. tower.y .. ")")
+        end
+    end
+    print("=== " .. #survivingBalls .. " merged balls will survive to next bubble phase ===")
+    
+    return survivingBalls
+end
+
 

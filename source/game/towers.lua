@@ -5,7 +5,8 @@ Towers = {}
 function Towers:new()
     local instance = {
         towers = {},
-        projectiles = {}
+        projectiles = {},
+        bubbleSprites = {} -- Will store references to bubble sprites
     }
     setmetatable(instance, self)
     self.__index = self
@@ -27,11 +28,36 @@ function Towers:convertFromGrid(grid)
                     range = Constants and Constants.TOWER_RANGE or 80,
                     damage = (Constants and Constants.TOWER_DAMAGE and Constants.TOWER_DAMAGE[bubble.type - 5]) or 10,
                     fireRate = Constants and Constants.TOWER_FIRE_RATE or 20,
-                    lastShot = 0
+                    lastShot = 0,
+                    originalBallType = bubble.type, -- Store original for sprite rendering
+                    gridX = x, -- Store original grid coordinates
+                    gridY = y
                 })
             end
         end
     end
+end
+
+function Towers:convertFromMergedBalls(mergedBallData)
+    self.towers = {}
+    
+    print("=== Converting merged balls to towers ===")
+    for _, ballData in ipairs(mergedBallData) do
+        table.insert(self.towers, {
+            x = ballData.screenX,
+            y = ballData.screenY,
+            type = ballData.type - 5, -- Convert merged ball type to tower type
+            range = Constants and Constants.TOWER_RANGE or 80,
+            damage = (Constants and Constants.TOWER_DAMAGE and Constants.TOWER_DAMAGE[ballData.type - 5]) or 10,
+            fireRate = Constants and Constants.TOWER_FIRE_RATE or 20,
+            lastShot = 0,
+            originalBallType = ballData.type, -- Store original for sprite rendering
+            gridX = ballData.x, -- Store original grid coordinates
+            gridY = ballData.y
+        })
+        print("Created tower: Type " .. (ballData.type - 5) .. " at screen (" .. ballData.screenX .. "," .. ballData.screenY .. ") grid (" .. ballData.x .. "," .. ballData.y .. ")")
+    end
+    print("=== Tower conversion complete. " .. #self.towers .. " towers created ===")
 end
 
 function Towers:update(creeps)
@@ -111,7 +137,13 @@ function Towers:draw()
     local gfx = playdate.graphics
     
     for _, tower in ipairs(self.towers) do
-        gfx.drawRect(tower.x - 8, tower.y - 8, 16, 16)
+        if tower.originalBallType and self.bubbleSprites[tower.originalBallType] then
+            -- Draw using the bubble sprite from the original merged ball
+            self.bubbleSprites[tower.originalBallType]:drawCentered(tower.x, tower.y)
+        else
+            -- Fallback to rectangle if no sprite available
+            gfx.drawRect(tower.x - 8, tower.y - 8, 16, 16)
+        end
     end
     
     for _, proj in ipairs(self.projectiles) do

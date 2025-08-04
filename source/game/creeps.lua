@@ -99,8 +99,9 @@ function Creeps:draw()
         end
     end
     
-    if self.creepsToSpawn > 0 then
-        gfx.drawTextAligned("Enemies: " .. self.creepsToSpawn, 200, 220, kTextAlignment.center)
-    end
+    -- Enemy count UI hidden for cleaner tower defense experience
+    -- if self.creepsToSpawn > 0 then
+    --     gfx.drawTextAligned("Enemies: " .. self.creepsToSpawn, 200, 220, kTextAlignment.center)
+    -- end
 end
 

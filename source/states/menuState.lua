@@ -26,6 +26,16 @@ function MenuState:update()
     return "menu"
 end
 
+function MenuState:getGameData()
+    -- Fresh start - clear all persisted game data including surviving merged balls
+    print("=== Starting fresh game - clearing all persisted data ===")
+    return {
+        level = 1,
+        shotsPerLevel = 10
+        -- No survivingMergedBalls - fresh start
+    }
+end
+
 function MenuState:draw()
     local gfx = playdate.graphics
     gfx.clear()
