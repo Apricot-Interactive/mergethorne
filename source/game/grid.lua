@@ -20,13 +20,19 @@ function Grid:new()
         gameOver = false,
         shotsRemaining = 10,
         nextBubbleType = math.random(1, 5),
-        bubbleSprites = {}
+        bubbleSprites = {},
+        -- Cached boundary calculations
+        leftBoundaryX = 0,
+        topBoundaryY = 0,
+        bottomBoundaryY = 0,
+        rightBoundaryX = 0
     }
     setmetatable(instance, self)
     self.__index = self
     
     instance:initGrid()
     instance:loadBubbleSprites()
+    instance:updateBoundaryCache()
     return instance
 end
 
@@ -36,14 +42,11 @@ function Grid:loadBubbleSprites()
     
     if spriteSheet then
         local sheetWidth, sheetHeight = spriteSheet:getSize()
-        print("Sprite sheet loaded: " .. sheetWidth .. "x" .. sheetHeight)
         
         -- Extract sprites from the sheet (handle both 5 and 10 sprite sheets)
         local numSprites = math.floor(sheetWidth / 30)
-        print("Detected " .. numSprites .. " sprites in sheet")
         for i = 1, numSprites do
             local x = (i - 1) * 30  -- Each sprite is 30 pixels wide
-            print("Extracting sprite " .. i .. " from x=" .. x)
             
             -- Create a new 30x30 image and draw the specific region
             local sprite = playdate.graphics.image.new(30, 30)
@@ -53,11 +56,9 @@ function Grid:loadBubbleSprites()
             playdate.graphics.popContext()
             
             local w, h = sprite:getSize()
-            print("Successfully created sprite " .. i .. ": " .. w .. "x" .. h)
             self.bubbleSprites[i] = sprite
         end
     else
-        print("Failed to load sprite sheet, using fallback sprites")
         -- Fallback: create simple filled circles if sprite sheet not found
         for i = 1, 5 do
             local sprite = playdate.graphics.image.new(30, 30)
@@ -76,9 +77,25 @@ function Grid:drawBubbleByType(x, y, bubbleType)
         self.bubbleSprites[bubbleType]:drawCentered(x, y)
     else
         -- Fallback to circle if sprite not available - this means sprite loading failed
-        print("Drawing fallback circle for bubbleType=" .. tostring(bubbleType) .. " (sprite not available)")
         playdate.graphics.drawCircleAtPoint(x, y, self.bubbleRadius)
     end
+end
+
+function Grid:updateBoundaryCache()
+    -- Calculate and cache all boundary positions
+    local leftmostX, _ = self:gridToScreen(1, 1)
+    local _, topmostY = self:gridToScreen(1, 1)
+    local _, bottomRowY = self:gridToScreen(1, 8)
+    local col9EvenRowX, _ = self:gridToScreen(9, 2)
+    
+    self.leftBoundaryX = leftmostX - self.bubbleRadius - 2
+    self.topBoundaryY = topmostY - self.bubbleRadius - 2
+    self.bottomBoundaryY = bottomRowY + self.bubbleRadius + 2
+    self.rightBoundaryX = col9EvenRowX + self.bubbleRadius + 2
+end
+
+function Grid:getShooterPosition()
+    return self.rightBoundaryX + 25, self.shooterY
 end
 
 function Grid:initGrid()
@@ -149,27 +166,20 @@ function Grid:setupLevel(level)
 end
 
 function Grid:shootBubble()
-    print("DEBUG: shootBubble called - projectile exists:", self.projectile ~= nil, "shots remaining:", self.shotsRemaining)
-    
     if self.projectile or self.shotsRemaining <= 0 then
-        print("DEBUG: shootBubble blocked - projectile exists:", self.projectile ~= nil, "shots:", self.shotsRemaining)
         return false
     end
     
-    -- Calculate dynamic shooter position (match the draw() method)
-    local col9EvenRowX, _ = self:gridToScreen(9, 2)
-    local actualBoundaryX = col9EvenRowX + self.bubbleRadius + 2
-    local dynamicShooterX = actualBoundaryX + 25
+    local shooterX, shooterY = self:getShooterPosition()
     
     self.projectile = {
-        x = dynamicShooterX,
-        y = self.shooterY,
+        x = shooterX,
+        y = shooterY,
         vx = math.cos(math.rad(self.aimAngle)) * (Constants and Constants.BUBBLE_SPEED or 8),
         vy = math.sin(math.rad(self.aimAngle)) * (Constants and Constants.BUBBLE_SPEED or 8),
         type = self.nextBubbleType
     }
     
-    print("DEBUG: Projectile created at", dynamicShooterX, self.shooterY, "angle:", self.aimAngle, "velocity:", self.projectile.vx, self.projectile.vy)
     
     -- Generate next bubble (don't decrement shots until projectile lands)
     self.nextBubbleType = math.random(1, 5)
@@ -185,51 +195,32 @@ function Grid:update()
     end
     
     if self.projectile then
-        local oldX, oldY = self.projectile.x, self.projectile.y
         self.projectile.x += self.projectile.vx
         self.projectile.y += self.projectile.vy
-        print("DEBUG: Projectile moved from", oldX, oldY, "to", self.projectile.x, self.projectile.y)
-        
-        -- Calculate grid boundaries for bouncing (same as draw() method)
-        local leftmostX, _ = self:gridToScreen(1, 1)
-        local _, topmostY = self:gridToScreen(1, 1)
-        local _, bottomRowY = self:gridToScreen(1, 8)
-        local col9EvenRowX, _ = self:gridToScreen(9, 2)
-        
-        local leftBoundaryX = leftmostX - self.bubbleRadius - 2
-        local topBoundaryY = topmostY - self.bubbleRadius - 2
-        local bottomBoundaryY = bottomRowY + self.bubbleRadius + 2
-        local rightBoundaryX = col9EvenRowX + self.bubbleRadius + 2
-        
-        print("DEBUG: Boundaries - Left:", leftBoundaryX, "Top:", topBoundaryY, "Bottom:", bottomBoundaryY, "Right:", rightBoundaryX)
-        print("DEBUG: Projectile edge check - Right edge at:", self.projectile.x + self.bubbleRadius)
         
         -- Handle bouncing off grid boundaries (circumference-based)
         -- Left boundary bounce
-        if self.projectile.x - self.bubbleRadius <= leftBoundaryX then
-            self.projectile.x = leftBoundaryX + self.bubbleRadius
+        if self.projectile.x - self.bubbleRadius <= self.leftBoundaryX then
+            self.projectile.x = self.leftBoundaryX + self.bubbleRadius
             self.projectile.vx = -self.projectile.vx
         end
         
         -- Top boundary bounce
-        if self.projectile.y - self.bubbleRadius <= topBoundaryY then
-            self.projectile.y = topBoundaryY + self.bubbleRadius
+        if self.projectile.y - self.bubbleRadius <= self.topBoundaryY then
+            self.projectile.y = self.topBoundaryY + self.bubbleRadius
             self.projectile.vy = -self.projectile.vy
-            print("DEBUG: Top bounce at y=", self.projectile.y)
         end
         
-        -- Bottom boundary bounce (don't let it go off screen)
-        if self.projectile.y + self.bubbleRadius >= bottomBoundaryY then
-            self.projectile.y = bottomBoundaryY - self.bubbleRadius
+        -- Bottom boundary bounce
+        if self.projectile.y + self.bubbleRadius >= self.bottomBoundaryY then
+            self.projectile.y = self.bottomBoundaryY - self.bubbleRadius
             self.projectile.vy = -self.projectile.vy
         end
         
         -- Remove projectile if it goes off screen (but not right boundary check since shooter is outside play area)
         if self.projectile.x <= 0 or self.projectile.y <= 0 or self.projectile.y >= 240 then
-            print("DEBUG: Projectile removed - pos:", self.projectile.x, self.projectile.y, "reason: boundary hit")
             self.projectile = nil
             self.shotsRemaining = self.shotsRemaining - 1
-            print("DEBUG: Shots remaining after removal:", self.shotsRemaining)
         else
             self:checkProjectileCollision()
         end
@@ -316,12 +307,8 @@ function Grid:checkBubbleCrossesGameBoundary(gridX, gridY)
     if gridX == 9 then
         local bubbleScreenX, _ = self:gridToScreen(gridX, gridY)
         
-        -- Calculate the same boundary position as in draw()
-        local col9EvenRowX, _ = self:gridToScreen(9, 2)
-        local boundaryLineX = col9EvenRowX + self.bubbleRadius + 2
-        
         -- If bubble center + radius crosses the boundary line, it's game over
-        if bubbleScreenX + self.bubbleRadius > boundaryLineX then
+        if bubbleScreenX + self.bubbleRadius > self.rightBoundaryX then
             return true
         end
     end
@@ -334,10 +321,8 @@ function Grid:checkMerges(x, y)
     if not bubble then return end
     
     local neighbors = self:getSameTypeNeighbors(x, y, bubble.type)
-    print("Found " .. #neighbors .. " neighbors of type " .. bubble.type .. " at " .. x .. "," .. y)
     
     if #neighbors >= 3 then
-        print("Merging " .. #neighbors .. " bubbles of type " .. bubble.type)
         for _, pos in ipairs(neighbors) do
             self.cells[pos.x][pos.y] = nil
         end
@@ -407,28 +392,11 @@ end
 function Grid:draw()
     local gfx = playdate.graphics
     
-    -- Calculate boundary line position: 9th column should be right against it
-    -- Account for stagger - even rows (like row 2, 4, 6, 8) push further right
-    local col9EvenRowX, _ = self:gridToScreen(9, 2)  -- Even row (staggered)
-    local col9OddRowX, _ = self:gridToScreen(9, 1)   -- Odd row (not staggered)
-    
-    -- Use the rightmost possible position for 9th column (staggered even row)
-    local actualBoundaryX = col9EvenRowX + self.bubbleRadius + 2  -- Just touching the edge
-    
-    -- Calculate grid bounds for boundary lines with 2-cell buffer
-    local leftmostX, _ = self:gridToScreen(1, 1)
-    local topmostX, topmostY = self:gridToScreen(1, 1)
-    local _, bottomRowY = self:gridToScreen(1, 8)  -- Always use row 8 as bottom
-    
-    local leftBoundaryX = leftmostX - self.bubbleRadius - 2  -- Add 2px buffer
-    local topBoundaryY = topmostY - self.bubbleRadius - 2  -- 2px buffer
-    local bottomBoundaryY = bottomRowY + self.bubbleRadius + 2  -- 2px buffer
-    
-    -- Draw boundary lines
-    self:drawDashedLine(gfx, actualBoundaryX, topBoundaryY, actualBoundaryX, bottomBoundaryY)  -- Right boundary (stop at top/bottom)
-    gfx.drawLine(leftBoundaryX, topBoundaryY, actualBoundaryX, topBoundaryY)  -- Top boundary
-    gfx.drawLine(leftBoundaryX, bottomBoundaryY, actualBoundaryX, bottomBoundaryY)  -- Bottom boundary
-    gfx.drawLine(leftBoundaryX, topBoundaryY, leftBoundaryX, bottomBoundaryY)  -- Left boundary
+    -- Draw boundary lines using cached values
+    self:drawDashedLine(gfx, self.rightBoundaryX, self.topBoundaryY, self.rightBoundaryX, self.bottomBoundaryY)  -- Right boundary
+    gfx.drawLine(self.leftBoundaryX, self.topBoundaryY, self.rightBoundaryX, self.topBoundaryY)  -- Top boundary
+    gfx.drawLine(self.leftBoundaryX, self.bottomBoundaryY, self.rightBoundaryX, self.bottomBoundaryY)  -- Bottom boundary
+    gfx.drawLine(self.leftBoundaryX, self.topBoundaryY, self.leftBoundaryX, self.bottomBoundaryY)  -- Left boundary
     
     -- Draw bubbles in hex grid
     for x = 1, self.width do
@@ -446,22 +414,21 @@ function Grid:draw()
         self:drawBubbleByType(self.projectile.x, self.projectile.y, self.projectile.type)
     end
     
-    -- Update shooter position relative to boundary
-    local dynamicShooterX = actualBoundaryX + 25
+    local shooterX, shooterY = self:getShooterPosition()
     
     -- Draw ready-to-fire ball at shooter position
     if not self.projectile and self.shotsRemaining > 0 then
-        self:drawBubbleByType(dynamicShooterX, self.shooterY, self.nextBubbleType)
+        self:drawBubbleByType(shooterX, shooterY, self.nextBubbleType)
     end
     
     -- Draw shots remaining below the shooter ball
-    gfx.drawTextAligned(tostring(self.shotsRemaining), dynamicShooterX, self.shooterY + self.bubbleRadius + 10, kTextAlignment.center)
+    gfx.drawTextAligned(tostring(self.shotsRemaining), shooterX, shooterY + self.bubbleRadius + 10, kTextAlignment.center)
     
-    -- Draw aim line from dynamic shooter position (only if not fired)
+    -- Draw aim line from shooter position (only if not fired)
     if not self.projectile then
-        gfx.drawLine(dynamicShooterX, self.shooterY, 
-                     dynamicShooterX + math.cos(math.rad(self.aimAngle)) * 30,
-                     self.shooterY + math.sin(math.rad(self.aimAngle)) * 30)
+        gfx.drawLine(shooterX, shooterY, 
+                     shooterX + math.cos(math.rad(self.aimAngle)) * 30,
+                     shooterY + math.sin(math.rad(self.aimAngle)) * 30)
     end
 end
 
