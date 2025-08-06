@@ -1,9 +1,9 @@
 Constants = {}
 
 -- Grid configuration (hex grid) - precise touching circles
-Constants.GRID_WIDTH = 11  -- Main play area width
-Constants.GRID_HEIGHT = 9  -- 9 rows total
-Constants.BUBBLE_RADIUS = 15  -- Bubble size
+Constants.GRID_WIDTH = 26  -- Main play area width  
+Constants.GRID_HEIGHT = 17  -- 17 rows total
+Constants.BUBBLE_RADIUS = 7.5  -- Bubble size (15px diameter)
 Constants.BUBBLE_DIAMETER = Constants.BUBBLE_RADIUS * 2
 Constants.HEX_SPACING_X = Constants.BUBBLE_DIAMETER  -- Horizontal spacing: exactly one diameter for touching
 Constants.HEX_SPACING_Y = Constants.BUBBLE_RADIUS * 1.732  -- Vertical spacing: √3 * radius for perfect hex
@@ -12,18 +12,62 @@ Constants.HEX_OFFSET_X = Constants.BUBBLE_RADIUS  -- Offset: exactly one radius 
 -- Bubble physics
 Constants.BUBBLE_SPEED = 8
 
--- Bubble types (1-5 basic, 6-10 elite)
+-- Bubble types (1-5 basic, 6-10 elite, 11-15 Tier 1)
 Constants.BUBBLE_TYPES = {
-    BASIC_RED = 1,
-    BASIC_BLUE = 2,
-    BASIC_GREEN = 3,
-    BASIC_YELLOW = 4,
-    BASIC_PURPLE = 5,
+    BASIC_RED = 1,       -- Fire
+    BASIC_BLUE = 2,      -- Air
+    BASIC_GREEN = 3,     -- Earth
+    BASIC_YELLOW = 4,    -- Lightning
+    BASIC_PURPLE = 5,    -- Water
     ELITE_RED = 6,
     ELITE_BLUE = 7,
     ELITE_GREEN = 8,
     ELITE_YELLOW = 9,
-    ELITE_PURPLE = 10
+    ELITE_PURPLE = 10,
+    TIER1_FIRE = 11,     -- Fire Tier 1
+    TIER1_WATER = 12,    -- Water Tier 1 
+    TIER1_EARTH = 13,    -- Earth Tier 1
+    TIER1_AIR = 14,      -- Air Tier 1
+    TIER1_LIGHTNING = 15 -- Lightning Tier 1
+}
+
+-- Element mapping from basic to Tier 1
+Constants.BASIC_TO_TIER1 = {
+    [1] = 11, -- Fire -> Fire Tier 1
+    [2] = 14, -- Air -> Air Tier 1
+    [3] = 13, -- Earth -> Earth Tier 1
+    [4] = 15, -- Lightning -> Lightning Tier 1
+    [5] = 12  -- Water -> Water Tier 1
+}
+
+-- Tier 1 configurations - each takes 3 horizontal cells
+-- Configuration A (leftmost 5 in sprite sheet): leftmost bubble position
+-- Configuration B (rightmost 5 in sprite sheet): rightmost bubble position
+Constants.TIER1_CONFIGS = {
+    A = { -- Configuration A positions (relative to leftmost)
+        {0, 0}, {1, 0}, {2, 0} -- 3 cells horizontally
+    },
+    B = { -- Configuration B positions (relative to leftmost) 
+        {0, 0}, {1, 0}, {2, 0} -- 3 cells horizontally
+    }
+}
+
+-- Tier 1 sprite indices for Configuration A and B
+Constants.TIER1_SPRITE_INDICES = {
+    A = { -- Leftmost 5 sprites (Configuration A)
+        [11] = 1,  -- Fire Tier 1 A
+        [12] = 2,  -- Water Tier 1 A
+        [13] = 3,  -- Earth Tier 1 A
+        [14] = 4,  -- Air Tier 1 A
+        [15] = 5   -- Lightning Tier 1 A
+    },
+    B = { -- Rightmost 5 sprites (Configuration B)
+        [11] = 6,  -- Fire Tier 1 B
+        [12] = 7,  -- Water Tier 1 B
+        [13] = 8,  -- Earth Tier 1 B
+        [14] = 9,  -- Air Tier 1 B
+        [15] = 10  -- Lightning Tier 1 B
+    }
 }
 
 -- Tower configuration

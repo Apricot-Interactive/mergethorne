@@ -21,9 +21,13 @@ function TowerState:enter(gameData)
     
     self.towers = Towers:new()
     
-    -- Pass bubble sprites from the grid to towers system
+    -- Pass bubble and Tier 1 sprites from the grid to towers system
     if gameData.grid and gameData.grid.bubbleSprites then
         self.towers.bubbleSprites = gameData.grid.bubbleSprites
+    end
+    
+    if gameData.grid and gameData.grid.tier1Sprites then
+        self.towers.tier1Sprites = gameData.grid.tier1Sprites
     end
     
     if gameData.mergedBallData then
@@ -94,7 +98,9 @@ function TowerState:getSurvivingMergedBalls()
                 y = tower.gridY,
                 type = tower.originalBallType,
                 screenX = tower.x,
-                screenY = tower.y
+                screenY = tower.y,
+                isTier1 = tower.isTier1,
+                tier1Config = tower.tier1Config
             })
             print("Preserving merged ball: Type " .. tower.originalBallType .. " at grid (" .. tower.gridX .. "," .. tower.gridY .. ") screen (" .. tower.x .. "," .. tower.y .. ")")
         end

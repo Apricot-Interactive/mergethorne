@@ -122,17 +122,19 @@ function BubbleState:despawnNonMergedBalls()
         for y = 1, self.grid.height do
             local bubble = self.grid.cells[x][y]
             if bubble then
-                if bubble.type > 5 then
-                    -- This is a merged ball, keep it and log it
+                if bubble.type > 5 or bubble.isTier1 then
+                    -- This is a merged ball (elite or Tier 1), keep it and log it
                     local screenX, screenY = self.grid:gridToScreen(x, y)
                     table.insert(self.mergedBallData, {
                         x = x,
                         y = y,
                         type = bubble.type,
                         screenX = screenX,
-                        screenY = screenY
+                        screenY = screenY,
+                        isTier1 = bubble.isTier1 or false,
+                        tier1Config = bubble.tier1Config
                     })
-                    print("Keeping merged ball: Type " .. bubble.type .. " at grid (" .. x .. "," .. y .. ") screen (" .. screenX .. "," .. screenY .. ")")
+                    print("Keeping merged ball: Type " .. bubble.type .. " (Tier1: " .. tostring(bubble.isTier1) .. ") at grid (" .. x .. "," .. y .. ") screen (" .. screenX .. "," .. screenY .. ")")
                 else
                     -- This is a basic ball, remove it
                     print("Despawning basic ball: Type " .. bubble.type .. " at grid (" .. x .. "," .. y .. ")")

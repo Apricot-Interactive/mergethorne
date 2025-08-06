@@ -6,7 +6,8 @@ function Towers:new()
     local instance = {
         towers = {},
         projectiles = {},
-        bubbleSprites = {} -- Will store references to bubble sprites
+        bubbleSprites = {}, -- Will store references to bubble sprites
+        tier1Sprites = {} -- Will store references to Tier 1 sprites
     }
     setmetatable(instance, self)
     self.__index = self
@@ -19,17 +20,32 @@ function Towers:convertFromGrid(grid)
     for x = 1, grid.width do
         for y = 1, grid.height do
             local bubble = grid.cells[x][y]
-            if bubble and bubble.type > 5 then
+            if bubble and (bubble.type > 5 or bubble.isTier1) then
                 local towerX, towerY = grid:gridToScreen(x, y)
+                local towerType, damage
+                
+                if bubble.isTier1 then
+                    -- Tier 1 bubbles become more powerful towers
+                    towerType = bubble.type - 10 -- Types 11-15 -> 1-5
+                    damage = (Constants and Constants.TOWER_DAMAGE and Constants.TOWER_DAMAGE[towerType]) or 10
+                    damage = damage * 2 -- Tier 1 towers do double damage
+                else
+                    -- Elite bubbles (6-10) become regular towers
+                    towerType = bubble.type - 5
+                    damage = (Constants and Constants.TOWER_DAMAGE and Constants.TOWER_DAMAGE[towerType]) or 10
+                end
+                
                 table.insert(self.towers, {
                     x = towerX,
                     y = towerY,
-                    type = bubble.type - 5,
+                    type = towerType,
                     range = Constants and Constants.TOWER_RANGE or 80,
-                    damage = (Constants and Constants.TOWER_DAMAGE and Constants.TOWER_DAMAGE[bubble.type - 5]) or 10,
+                    damage = damage,
                     fireRate = Constants and Constants.TOWER_FIRE_RATE or 20,
                     lastShot = 0,
                     originalBallType = bubble.type, -- Store original for sprite rendering
+                    isTier1 = bubble.isTier1 or false,
+                    tier1Config = bubble.tier1Config,
                     gridX = x, -- Store original grid coordinates
                     gridY = y
                 })
@@ -43,19 +59,34 @@ function Towers:convertFromMergedBalls(mergedBallData)
     
     print("=== Converting merged balls to towers ===")
     for _, ballData in ipairs(mergedBallData) do
+        local towerType, damage
+        
+        if ballData.isTier1 then
+            -- Tier 1 bubbles become more powerful towers
+            towerType = ballData.type - 10 -- Types 11-15 -> 1-5
+            damage = (Constants and Constants.TOWER_DAMAGE and Constants.TOWER_DAMAGE[towerType]) or 10
+            damage = damage * 2 -- Tier 1 towers do double damage
+        else
+            -- Elite bubbles (6-10) become regular towers
+            towerType = ballData.type - 5
+            damage = (Constants and Constants.TOWER_DAMAGE and Constants.TOWER_DAMAGE[towerType]) or 10
+        end
+        
         table.insert(self.towers, {
             x = ballData.screenX,
             y = ballData.screenY,
-            type = ballData.type - 5, -- Convert merged ball type to tower type
+            type = towerType,
             range = Constants and Constants.TOWER_RANGE or 80,
-            damage = (Constants and Constants.TOWER_DAMAGE and Constants.TOWER_DAMAGE[ballData.type - 5]) or 10,
+            damage = damage,
             fireRate = Constants and Constants.TOWER_FIRE_RATE or 20,
             lastShot = 0,
             originalBallType = ballData.type, -- Store original for sprite rendering
+            isTier1 = ballData.isTier1 or false,
+            tier1Config = ballData.tier1Config,
             gridX = ballData.x, -- Store original grid coordinates
             gridY = ballData.y
         })
-        print("Created tower: Type " .. (ballData.type - 5) .. " at screen (" .. ballData.screenX .. "," .. ballData.screenY .. ") grid (" .. ballData.x .. "," .. ballData.y .. ")")
+        print("Created tower: Type " .. towerType .. " (Tier1: " .. tostring(ballData.isTier1) .. ") at screen (" .. ballData.screenX .. "," .. ballData.screenY .. ") grid (" .. ballData.x .. "," .. ballData.y .. ")")
     end
     print("=== Tower conversion complete. " .. #self.towers .. " towers created ===")
 end
@@ -137,7 +168,19 @@ function Towers:draw()
     local gfx = playdate.graphics
     
     for _, tower in ipairs(self.towers) do
-        if tower.originalBallType and self.bubbleSprites[tower.originalBallType] then
+        if tower.isTier1 and tower.tier1Config then
+            -- Draw Tier 1 tower using appropriate sprite  
+            local spriteIndex = Constants.TIER1_SPRITE_INDICES[tower.tier1Config][tower.originalBallType]
+            if spriteIndex and self.tier1Sprites[spriteIndex] then
+                -- Position sprite to align with bubble radius
+                local spriteX = tower.x - 7.5  -- Half of bubble radius (15px / 2)
+                local spriteY = tower.y - 7.5  -- Half of bubble radius
+                self.tier1Sprites[spriteIndex]:draw(spriteX, spriteY)
+            else
+                -- Fallback for Tier 1
+                gfx.fillRect(tower.x - 15, tower.y - 13.5, 30, 27)
+            end
+        elseif tower.originalBallType and self.bubbleSprites[tower.originalBallType] then
             -- Draw using the bubble sprite from the original merged ball
             self.bubbleSprites[tower.originalBallType]:drawCentered(tower.x, tower.y)
         else
