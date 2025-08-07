@@ -7,11 +7,44 @@ function Towers:new()
         towers = {},
         projectiles = {},
         bubbleSprites = {}, -- Will store references to bubble sprites
-        tier1Sprites = {} -- Will store references to Tier 1 sprites
+        tier1Sprites = {}, -- Will store references to Tier 1 sprites
+        -- Grid constants for position calculation
+        bubbleRadius = Constants and Constants.BUBBLE_RADIUS or 7.5,
+        hexSpacingX = Constants and Constants.HEX_SPACING_X or 15,
+        hexSpacingY = Constants and Constants.HEX_SPACING_Y or 13,
+        hexOffsetX = Constants and Constants.HEX_OFFSET_X or 7.5,
+        gridHeight = Constants and Constants.GRID_HEIGHT or 17
     }
     setmetatable(instance, self)
     self.__index = self
     return instance
+end
+
+-- Convert grid coordinates to screen position (matching grid.lua exactly)
+function Towers:gridToScreen(gridX, gridY)
+    local screenX = (gridX - 1) * self.hexSpacingX
+    local screenY = (gridY - 1) * self.hexSpacingY
+    
+    -- Offset even rows for hex pattern
+    if gridY % 2 == 0 then  
+        screenX = screenX + self.hexOffsetX
+    end
+    
+    -- Match grid.lua positioning exactly
+    local startX = 50  -- Fixed left margin
+    local gridHeight = (self.gridHeight - 1) * self.hexSpacingY + 2 * self.bubbleRadius
+    local startY = (240 - gridHeight) / 2
+    
+    return startX + screenX + self.bubbleRadius, startY + screenY + self.bubbleRadius
+end
+
+-- Set grid parameters from the actual grid instance to ensure exact positioning match
+function Towers:setGridParameters(grid)
+    self.bubbleRadius = grid.bubbleRadius
+    self.hexSpacingX = grid.hexSpacingX
+    self.hexSpacingY = grid.hexSpacingY
+    self.hexOffsetX = grid.hexOffsetX
+    self.gridHeight = grid.height
 end
 
 function Towers:convertFromGrid(grid)
@@ -73,32 +106,27 @@ function Towers:convertFromMergedBalls(mergedBallData)
         end
         
         table.insert(self.towers, {
-            x = ballData.screenX,
-            y = ballData.screenY,
             type = towerType,
             range = Constants and Constants.TOWER_RANGE or 80,
             damage = damage,
             fireRate = Constants and Constants.TOWER_FIRE_RATE or 20,
             lastShot = 0,
-            originalBallType = ballData.type, -- Store original for sprite rendering
-            isTier1 = ballData.isTier1 or false,
-            tier1Config = ballData.tier1Config,
-            gridX = ballData.x, -- Store original grid coordinates
+            gridX = ballData.x, -- Store grid coordinates for targeting
             gridY = ballData.y
         })
-        print("Created tower: Type " .. towerType .. " (Tier1: " .. tostring(ballData.isTier1) .. ") at screen (" .. ballData.screenX .. "," .. ballData.screenY .. ") grid (" .. ballData.x .. "," .. ballData.y .. ")")
+        print("Created tower: Type " .. towerType .. " (Tier1: " .. tostring(ballData.isTier1) .. ") at grid (" .. ballData.x .. "," .. ballData.y .. ")")
     end
     print("=== Tower conversion complete. " .. #self.towers .. " towers created ===")
 end
 
-function Towers:update(creeps)
+function Towers:update(creeps, grid)
     for _, tower in ipairs(self.towers) do
         tower.lastShot += 1
         
         if tower.lastShot >= tower.fireRate then
-            local target = self:findTarget(tower, creeps.creeps)
+            local target = self:findTarget(tower, creeps.creeps, grid)
             if target then
-                self:shootAt(tower, target)
+                self:shootAt(tower, target, grid)
                 tower.lastShot = 0
             end
         end
@@ -120,13 +148,16 @@ function Towers:update(creeps)
     end
 end
 
-function Towers:findTarget(tower, creeps)
+function Towers:findTarget(tower, creeps, grid)
     local closest = nil
     local closestDist = tower.range
     
+    -- Get tower position from grid
+    local towerX, towerY = grid:gridToScreen(tower.gridX, tower.gridY)
+    
     for _, creep in ipairs(creeps) do
         if creep.hp > 0 then
-            local dist = math.sqrt((tower.x - creep.x)^2 + (tower.y - creep.y)^2)
+            local dist = math.sqrt((towerX - creep.x)^2 + (towerY - creep.y)^2)
             if dist < closestDist then
                 closest = creep
                 closestDist = dist
@@ -137,14 +168,17 @@ function Towers:findTarget(tower, creeps)
     return closest
 end
 
-function Towers:shootAt(tower, target)
-    local dx = target.x - tower.x
-    local dy = target.y - tower.y
+function Towers:shootAt(tower, target, grid)
+    -- Get tower position from grid
+    local towerX, towerY = grid:gridToScreen(tower.gridX, tower.gridY)
+    
+    local dx = target.x - towerX
+    local dy = target.y - towerY
     local dist = math.sqrt(dx^2 + dy^2)
     
     table.insert(self.projectiles, {
-        x = tower.x,
-        y = tower.y,
+        x = towerX,
+        y = towerY,
         vx = (dx / dist) * (Constants and Constants.PROJECTILE_SPEED or 6),
         vy = (dy / dist) * (Constants and Constants.PROJECTILE_SPEED or 6),
         damage = tower.damage
@@ -165,29 +199,13 @@ function Towers:checkProjectileHit(proj, creeps)
 end
 
 function Towers:draw()
+    -- This method is now unused - grid handles tower drawing for perfect positioning
+    -- Keeping for backward compatibility
+    self:drawProjectiles()
+end
+
+function Towers:drawProjectiles()
     local gfx = playdate.graphics
-    
-    for _, tower in ipairs(self.towers) do
-        if tower.isTier1 and tower.tier1Config then
-            -- Draw Tier 1 tower using appropriate sprite  
-            local spriteIndex = Constants.TIER1_SPRITE_INDICES[tower.tier1Config][tower.originalBallType]
-            if spriteIndex and self.tier1Sprites[spriteIndex] then
-                -- Position sprite to align with bubble radius
-                local spriteX = tower.x - 7.5  -- Half of bubble radius (15px / 2)
-                local spriteY = tower.y - 7.5  -- Half of bubble radius
-                self.tier1Sprites[spriteIndex]:draw(spriteX, spriteY)
-            else
-                -- Fallback for Tier 1
-                gfx.fillRect(tower.x - 15, tower.y - 13.5, 30, 27)
-            end
-        elseif tower.originalBallType and self.bubbleSprites[tower.originalBallType] then
-            -- Draw using the bubble sprite from the original merged ball
-            self.bubbleSprites[tower.originalBallType]:drawCentered(tower.x, tower.y)
-        else
-            -- Fallback to rectangle if no sprite available
-            gfx.drawRect(tower.x - 8, tower.y - 8, 16, 16)
-        end
-    end
     
     for _, proj in ipairs(self.projectiles) do
         gfx.fillCircleAtPoint(proj.x, proj.y, 2)

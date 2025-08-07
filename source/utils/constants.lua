@@ -28,7 +28,8 @@ Constants.BUBBLE_TYPES = {
     TIER1_WATER = 12,    -- Water Tier 1 
     TIER1_EARTH = 13,    -- Earth Tier 1
     TIER1_AIR = 14,      -- Air Tier 1
-    TIER1_LIGHTNING = 15 -- Lightning Tier 1
+    TIER1_LIGHTNING = 15, -- Lightning Tier 1
+    TIER2_UNIFIED = 16   -- Tier 2 (unified type for all merges)
 }
 
 -- Element mapping from basic to Tier 1
@@ -38,6 +39,15 @@ Constants.BASIC_TO_TIER1 = {
     [3] = 13, -- Earth -> Earth Tier 1
     [4] = 15, -- Lightning -> Lightning Tier 1
     [5] = 12  -- Water -> Water Tier 1
+}
+
+-- Element mapping from Tier 1 to Tier 2 (all merge to unified Tier 2)
+Constants.TIER1_TO_TIER2 = {
+    [11] = 16, -- Fire Tier 1 -> Tier 2
+    [12] = 16, -- Water Tier 1 -> Tier 2
+    [13] = 16, -- Earth Tier 1 -> Tier 2
+    [14] = 16, -- Air Tier 1 -> Tier 2
+    [15] = 16  -- Lightning Tier 1 -> Tier 2
 }
 
 -- Tier 1 configurations - each takes 3 horizontal cells
@@ -52,21 +62,31 @@ Constants.TIER1_CONFIGS = {
     }
 }
 
--- Tier 1 sprite indices for Configuration A and B
+-- Tier 2 configuration - diamond pattern (7 cells)
+-- Pattern: center at (0,0), diamond shape
+Constants.TIER2_CONFIG = {
+    {0, -2},        -- Top
+    {-1, -1}, {1, -1},  -- Second row (2 cells)
+    {0, 0},         -- Center
+    {-1, 1}, {1, 1},  -- Fourth row (2 cells)
+    {0, 2}          -- Bottom
+}
+
+-- Tier 1 sprite indices matching actual sprite sheet orientation
 Constants.TIER1_SPRITE_INDICES = {
-    A = { -- Leftmost 5 sprites (Configuration A)
-        [11] = 1,  -- Fire Tier 1 A
-        [12] = 2,  -- Water Tier 1 A
-        [13] = 3,  -- Earth Tier 1 A
-        [14] = 4,  -- Air Tier 1 A
-        [15] = 5   -- Lightning Tier 1 A
+    UP = { -- Up-facing triangles (sprites 6-10, right half of sheet)
+        [11] = 6,  -- Fire Tier 1 UP
+        [12] = 7,  -- Water Tier 1 UP
+        [13] = 8,  -- Earth Tier 1 UP
+        [14] = 9,  -- Air Tier 1 UP
+        [15] = 10  -- Lightning Tier 1 UP
     },
-    B = { -- Rightmost 5 sprites (Configuration B)
-        [11] = 6,  -- Fire Tier 1 B
-        [12] = 7,  -- Water Tier 1 B
-        [13] = 8,  -- Earth Tier 1 B
-        [14] = 9,  -- Air Tier 1 B
-        [15] = 10  -- Lightning Tier 1 B
+    DOWN = { -- Down-facing triangles (sprites 1-5, left half of sheet)
+        [11] = 1,  -- Fire Tier 1 DOWN
+        [12] = 2,  -- Water Tier 1 DOWN
+        [13] = 3,  -- Earth Tier 1 DOWN
+        [14] = 4,  -- Air Tier 1 DOWN
+        [15] = 5   -- Lightning Tier 1 DOWN
     }
 }
 

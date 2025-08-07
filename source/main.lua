@@ -31,6 +31,17 @@ function GameManager:setState(stateName, data)
         
         if self.currentState.getGameData then
             local newData = self.currentState:getGameData()
+            print("GameManager transferring data:")
+            for k, v in pairs(newData) do
+                if k == "flyoffTowers" then
+                    print("  " .. k .. ": " .. #v .. " towers")
+                else
+                    print("  " .. k .. ": " .. tostring(v))
+                end
+            end
+            -- Clear previous data to avoid stale keys
+            self.gameData = {}
+            -- Copy new data
             for k, v in pairs(newData) do
                 self.gameData[k] = v
             end

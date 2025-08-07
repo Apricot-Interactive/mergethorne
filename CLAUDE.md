@@ -41,16 +41,17 @@ source/
 4. **Performance Focus**: Object pooling, minimal garbage collection, integer math where possible
 
 ### Bubble Types
-- **Basic Bubbles (1-5)**: Red, Blue, Green, Yellow, Purple
-- **Elite Bubbles (6-10)**: Stronger versions that become towers in TD phase
-- **Merging**: 3+ matching bubbles merge into the next tier
+- **Basic Bubbles (1-5)**: Fire, Air, Earth, Lightning, Water (15x15px sprites)
+- **Elite Bubbles (6-10)**: Stronger versions that become regular towers in TD phase  
+- **Tier 1 Bubbles (11-15)**: Advanced triangular bubbles that occupy 3 cells, become powerful towers
+- **Merging**: 3+ basic bubbles merge into corresponding Tier 1 (Fire→Fire Tier 1, etc.)
 
-### Game Constants
-- Grid: 12x8 cells, 30px cell size
+### Game Constants  
+- Grid: 26x17 cells, hex layout with 15px bubble diameter
 - Shots per level: 10
 - Base HP: 100
 - Max levels: 3
-- Bubble types: 5 basic + 5 elite
+- Bubble types: 5 basic + 5 elite + 5 Tier 1
 
 ## Development Phases
 
@@ -134,3 +135,74 @@ Screenshots are stored in `.sshots/` directory for development reference in .png
 - **Bubble Mechanics**: Preview system, merge detection, strategic shooting, crank controls
 - **Tower Defense**: Converted merged balls as towers, creep spawning, auto-targeting, base defense
 - **Level Progression**: 3 levels with increasing difficulty, win/lose conditions, menu integration
+
+## Advanced Tier 1 System ✓
+
+### Tier 1 Bubble Mechanics
+- **Merge Trigger**: 3 matching basic bubbles merge into corresponding Tier 1 bubble
+- **Element Mapping**: Fire(1)→Fire Tier 1(11), Air(2)→Air Tier 1(14), Earth(3)→Earth Tier 1(13), Lightning(4)→Lightning Tier 1(15), Water(5)→Water Tier 1(12)
+- **Multi-cell Occupation**: Each Tier 1 occupies 3 cells in triangular hex pattern
+- **Smart Configuration**: Configuration A/B selection based on merge shape and positioning
+
+### Configuration System
+- **Configuration A**: Horizontal line on top, point below left (sprite indices 1-5)
+- **Configuration B**: Horizontal line on top, point below right (sprite indices 6-10)
+- **Intelligent Selection**: Analyzes center of mass of merged bubbles to choose optimal configuration
+- **Position Optimization**: Smart nudging system finds legal placement if preferred spot conflicts
+
+### Advanced Collision & Placement
+- **Hierarchical Rules**: Tier 1 can overwrite basic bubbles but not elite/Tier 1 bubbles
+- **Complete Overlap Detection**: Prevents overlapping with existing Tier 1 footprints
+- **Cached Performance**: O(1) collision detection using cached occupied cell lookups
+- **Safe Merging**: Always clears all matched bubbles even if final placement differs
+
+### Tower Integration  
+- **Enhanced Power**: Tier 1 towers deal double damage compared to elite towers
+- **Visual Preservation**: Maintain triangular appearance throughout bubble↔tower transitions
+- **State Persistence**: Perfect restoration across level transitions with metadata preservation
+- **Sprite Alignment**: Precise 30x27px sprite positioning for grid-perfect alignment
+
+## Performance Optimizations ✓
+
+### Major Performance Improvements
+- **Tier 1 Cache System**: O(n³) → O(1) collision detection with cached occupied cells
+- **Eliminated sqrt() Operations**: Use squared distance comparisons for faster placement
+- **Pre-allocated Direction Tables**: Avoid table creation in merge detection loops  
+- **Optimized Grid Traversal**: Smart availability checking with early exit conditions
+- **Fixed Memory Leaks**: Proper bubble state preservation during match testing
+
+### Device Performance
+- **Eliminated Frame Lag**: Resolved multi-frame delays when balls stop moving
+- **Smooth Collision Detection**: Near-instantaneous bubble placement and merge detection
+- **Efficient State Transitions**: Fast level switching with proper cache management
+- **Memory Optimized**: Minimal garbage collection with reused data structures
+
+## Testing Process
+**Build Command**: `pdc source towers_of_mergethorne.pdx` (user handles build and testing)
+**Testing Notes**: User performs builds and gameplay testing to verify fixes
+
+## Current Status: DEBUG MODE IMPLEMENTATION ⚠️
+**Debug mode with Tier 2 bubble system** - core mechanics working but needs refinement:
+
+### Recent Major Fixes Applied ✓
+- **Fixed Invisible Bubbles**: Tier 1 and Tier 2 projectiles now properly occupy footprints and set anchor/center flags
+- **Fixed Self-Merging**: Tier 1 bubbles no longer merge with their own footprint cells
+- **Fixed Coordinate System**: Separated screen vs grid coordinate drawing functions
+- **Expanded Tier 2 Search**: Systematic radial placement algorithm prevents merge failures
+- **Reduced Debug Spam**: Cleaned up excessive logging for manageable output
+
+### Current Issues Remaining 🔧
+- **Tier 2 Visibility**: Some Tier 2 bubbles still not rendering correctly
+- **Spacing Problems**: Tier 1 bubbles have inconsistent grid alignment and spacing
+- **Overlap Issues**: Some bubbles placing inside/overlapping existing ones
+
+### Debug Mode Status
+- **Working**: Tier 1 placement, basic merging, tower conversion, level progression
+- **Partial**: Tier 2 visibility (sometimes works, sometimes doesn't)
+- **Needs Work**: Perfect grid alignment, consistent spacing, overlap prevention
+
+### Next Session Priorities
+1. Fix remaining Tier 2 rendering issues
+2. Perfect Tier 1 grid alignment and spacing
+3. Eliminate all bubble overlapping
+4. Final polish and testing
