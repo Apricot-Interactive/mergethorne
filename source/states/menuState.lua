@@ -1,52 +1,56 @@
+import "CoreLibs/graphics"
+
+local pd <const> = playdate
+local gfx <const> = pd.graphics
+
 MenuState = {}
 
 function MenuState:new()
-    local instance = {
-        selectedOption = 1,
-        options = {"Play"}
-    }
-    setmetatable(instance, self)
+    local state = {}
+    setmetatable(state, self)
     self.__index = self
-    return instance
+    
+    state.selectedOption = 1
+    state.options = {"Play"}
+    
+    return state
 end
 
 function MenuState:enter()
-    self.selectedOption = 1
+    
 end
 
 function MenuState:exit()
+    
 end
 
 function MenuState:update()
-    if playdate.buttonJustPressed(playdate.kButtonA) then
+    if pd.buttonJustPressed(pd.kButtonA) then
         if self.selectedOption == 1 then
             return "bubble"
         end
     end
-    return "menu"
-end
-
-function MenuState:getGameData()
-    -- Fresh start - clear all persisted game data including surviving merged balls
-    print("=== Starting fresh game - clearing all persisted data ===")
-    return {
-        level = 1,
-        shotsPerLevel = 10
-        -- No survivingMergedBalls - fresh start
-    }
+    
+    return nil
 end
 
 function MenuState:draw()
-    local gfx = playdate.graphics
     gfx.clear()
     
-    gfx.drawTextAligned("TOWERS OF MERGETHORNE", 200, 60, kTextAlignment.center)
+    gfx.setFont(gfx.getSystemFont(gfx.kFontVariantBold))
+    local titleText = "Towers of Mergethorne"
+    local titleWidth = gfx.getTextSize(titleText)
+    gfx.drawTextAligned(titleText, 200, 100, kTextAlignment.center)
     
-    local y = 120
+    gfx.setFont(gfx.getSystemFont(gfx.kFontVariantNormal))
+    local optionY = 160
     for i, option in ipairs(self.options) do
-        local prefix = (i == self.selectedOption) and "• " or "  "
-        gfx.drawTextAligned(prefix .. option, 200, y, kTextAlignment.center)
-        y += 30
+        local prefix = ""
+        if i == self.selectedOption then
+            prefix = "* "
+        else
+            prefix = "  "
+        end
+        gfx.drawText(prefix .. option, 180, optionY + (i-1) * 25)
     end
 end
-

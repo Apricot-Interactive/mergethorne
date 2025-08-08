@@ -9,7 +9,8 @@
       "Bash(mkdir:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(ren:*)"
+      "Bash(ren:*)",
+      "Bash(find:*)"
     ],
     "deny": []
   }
