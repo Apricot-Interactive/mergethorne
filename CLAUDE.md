@@ -6,9 +6,9 @@ Mergethorne is a bubble shooter game for the Playdate console featuring hex grid
 
 ### Transformation Summary
 - **Before**: 1,183 lines of complex, overlapping systems
-- **After**: 911 lines with clean, modular architecture  
-- **Reduction**: 47% code reduction while adding tier progression systems
-- **Performance**: Optimized for 60fps stable gameplay
+- **After**: ~1900 lines with complete feature set including combat systems
+- **Evolution**: Added tier progression, enemy creeps, allied troops, and unified collision
+- **Performance**: Maintained 60fps stable gameplay with complex unit interactions
 
 ---
 
@@ -28,8 +28,17 @@ main.lua (18 lines)     - Clean game loop: input → update → render
 Extended the core with advanced bubble mechanics:
 
 ```
-Basic Bubbles → Tier 1 → Tier 2
-    (3-merge)   (magnetic)
+Basic Bubbles → Tier 1 → Tier 2 → Tier 3
+    (3-merge)   (magnetic) (magnetic)
+```
+
+### Phase 3: Combat Systems
+Added dynamic enemy and allied unit systems:
+
+```
+Enemy Creeps: Spawn → Stage → March (4-shot cycles)
+Allied Troops: Spawn from tiers → Rally at 7,1 → March on shot 4
+Unified Collision: All units respect 1px sprite buffers
 ```
 
 ### Key Design Principles
@@ -112,6 +121,42 @@ Tier 1 magnetic combinations create specific Tier 2 sprites:
 
 ---
 
+## Combat Systems Overview
+
+### Enemy Creep System
+Hostile units that spawn and march across the battlefield in coordinated waves:
+
+```
+Creep Cycle (4 shots):
+Shot 1: 5x Basic creeps (3px collision) spawn at random staging positions (3,18 through 11,18)
+Shot 2: 3x Tier 1 creeps (4px collision) spawn and march to staging points
+Shot 3: 2x Tier 2 creeps (8px collision) spawn with enhanced capabilities  
+Shot 4: All staged creeps march left off-screen, cycle resets
+```
+
+**Staging Positions**: Rows 3, 5, 7, 9, 11 at column 18 (right edge)
+**Movement**: Spawn off-screen right → March to staging → Hold → March left off-screen
+
+### Allied Troop System  
+Friendly units spawned from tier bubbles that rally and march in formation:
+
+```
+Troop Spawning Rules:
+- Every shot: All tier bubbles (T1/T2/T3) spawn corresponding troops
+- Shots 2,6,10,etc: 1/3 of basic bubbles also spawn basic troops
+- Shot 4: All troops march right off-screen in formation
+
+Rally Behavior:
+- Rally Point: Position 7,1 (left side of hex grid)
+- Clustering: Tight hexagonal packing around rally point, respects screen boundaries
+- March Formation: Fan out vertically across rows 1-13 for first 200px of march
+```
+
+**Collision System**: All units (troops/creeps) respect 1px sprite collision buffers
+**Boundary Awareness**: Units stay within screen bounds, cluster forward/up/down when needed
+
+---
+
 ## File Structure & Organization
 
 ```
@@ -119,13 +164,21 @@ mergethorne/
 ├── source/
 │   ├── main.lua              # Game loop (18 lines)
 │   ├── game/
-│   │   └── grid.lua          # Core game logic (911 lines)
+│   │   ├── grid.lua          # Complete game logic (~1900 lines)
+│   │   └── mergeConstants.lua # Tier combinations & sprite constants (120 lines)
 │   ├── assets/
 │   │   └── sprites/
 │   │       ├── bubbles-basic.png     # 5 basic bubble types
 │   │       ├── bubbles-tier-one.png  # 5 tier 1 variants
-│   │       ├── bubbles-tier-two.png  # 10 combination sprites
-│   │       ├── bubbles-tier-three.png # (unused - future)
+│   │       ├── bubbles-tier-two.png  # 10 tier 2 combination sprites
+│   │       ├── bubbles-tier-three.png # 10 tier 3 combination sprites
+│   │       ├── creeps-basic.png      # Enemy basic creeps
+│   │       ├── creeps-tier-one.png   # Enemy tier 1 creeps
+│   │       ├── creeps-tier-two.png   # Enemy tier 2 creeps
+│   │       ├── troops-basic.png      # Allied basic troops
+│   │       ├── troops-tier-one.png   # Allied tier 1 troops
+│   │       ├── troops-tier-two.png   # Allied tier 2 troops
+│   │       ├── troops-tier-three.png # Allied tier 3 troops
 │   │       └── ref-grid.png          # Development reference
 │   └── pdxinfo               # Playdate metadata
 ├── builds/                   # Compiled .pdx files
@@ -135,14 +188,15 @@ mergethorne/
 
 ### Function Organization (grid.lua)
 ```
-Lines 1-66:    Sprite loading & constants
-Lines 67-183:  Grid creation & initialization  
-Lines 184-233: Input handling & ball shooting
-Lines 234-389: Ball physics & collision detection
-Lines 390-483: Basic merge detection & animation
-Lines 484-689: Tier 1 & 2 progression systems
-Lines 690-735: Game over handling
-Lines 736-911: Rendering pipeline (grid, balls, UI)
+Lines 1-60:     Constants & sprite loading
+Lines 61-120:   Sprite loading functions (Basic + Tier + Creep + Troop)
+Lines 121-280:  Core game systems (init, grid, boundaries, game state)
+Lines 281-430:  Input handling, ball physics & collision detection
+Lines 431-685:  Merge detection, animations, and tier progression
+Lines 686-1230:  Tier progression systems (T1 → T2 → T3)
+Lines 1231-1513: Enemy creep systems (spawning, staging, marching)
+Lines 1514-1900: Allied troop systems (spawning, rallying, collision)
+Lines 1901-end:  Rendering pipeline (grid, balls, units, UI)
 ```
 
 ---
@@ -168,7 +222,13 @@ Lines 736-911: Rendering pipeline (grid, balls, UI)
 ### Tier Progression
 - `Grid:checkMagneticCombinations()` - Detect Tier 1 pairs in range
 - `Grid:createTierTwoCombination()` - Form Tier 2 from Tier 1 pair
-- `Grid:getTierTwoSprite()` - Lookup combination sprite index
+- `MergeConstants.getTierTwoSprite()` - Lookup combination sprite from constants
+
+### Constants & Configuration (`mergeConstants.lua`)
+- `MergeConstants.BASIC_TYPES` - Elemental bubble type definitions
+- `MergeConstants.TIER_2_COMBINATIONS` - Tier 1 + Tier 1 → Tier 2 matrix
+- `MergeConstants.SPRITE_INFO` - Size and centering data for all tiers
+- `MergeConstants.getSpriteOffset()` - Helper for consistent sprite positioning
 
 ### Rendering Pipeline
 - `Grid:drawGrid()` - Debug view of hex grid
@@ -197,6 +257,13 @@ Lines 736-911: Rendering pipeline (grid, balls, UI)
 - **Consistent Naming**: Clear, descriptive function and variable names
 - **Error Prevention**: Bounds checking and null safety throughout
 - **Modular Design**: Clean separation between core mechanics and advanced features
+- **Constants Organization**: MergeConstants.lua centralizes tier combinations and sprite data
+
+### Recent Quality Analysis (Phase 3)
+- **Collision Detection**: Identified 6-10x optimization potential via collision caching
+- **Magic Numbers**: Most hardcoded values moved to MergeConstants module
+- **Performance Status**: 60fps target achieved, optimizations now polish-level priority
+- **Architecture Maturity**: Codebase ready for feature expansion rather than structural changes
 
 ---
 

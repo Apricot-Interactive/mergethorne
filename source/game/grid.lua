@@ -1,13 +1,16 @@
--- Mergethorne Grid System - Phase 1: Simplified Core
+-- Mergethorne Grid System - Complete Implementation
 -- 
 -- Architecture Overview:
--- - Single unified cell system: {ballType, occupied, permanent}
+-- - Single unified cell system: {ballType, occupied, permanent, tier}
 -- - 20px hex grid, visual collision detection with immediate snapping
--- - Simple merge detection via flood-fill, animated ball convergence
--- - Extensible structure ready for Phase 2 tier/magnetism systems
+-- - Merge detection via flood-fill, animated ball convergence and tier progression
+-- - Complete tier progression: Basic → Tier 1 → Tier 2 → Tier 3
+-- - Enemy creep spawning system with staging positions and march cycles
+-- - Allied troop spawning system with rally point clustering and march coordination
+-- - Unified collision system respecting 1px sprite buffers across all unit types
 --
--- Performance targets: 60fps stable, <400 lines total
--- Design principle: Each function <20 lines, minimal nesting
+-- Performance: 60fps stable, ~1900 lines with full feature set
+-- Design principle: Clean separation of concerns, boundary-aware positioning
 
 local MergeConstants = import("game/mergeConstants")
 
@@ -17,6 +20,7 @@ local gfx <const> = pd.graphics
 -- Core constants
 local BALL_SPEED <const> = 9
 local COLLISION_RADIUS <const> = 20
+local FLYING_BALL_RADIUS <const> = 18  -- 2px smaller for tighter gaps
 local AIM_LINE_LENGTH <const> = 50
 local SHOOTER_IDX <const> = 12 * 20 + 16  -- Bottom center
 local TOP_BOUNDARY <const> = 8
@@ -25,11 +29,36 @@ local LEFT_BOUNDARY <const> = 10
 local MERGE_ANIMATION_FRAMES <const> = 8
 local GAME_OVER_FLASHES <const> = 3
 
+-- Creep system constants
+local CREEP_STAGING_POSITIONS <const> = {
+    (3-1) * 20 + 18,   -- 3,18
+    (5-1) * 20 + 18,   -- 5,18  
+    (7-1) * 20 + 18,   -- 7,18
+    (9-1) * 20 + 18,   -- 9,18
+    (11-1) * 20 + 18   -- 11,18
+}
+local CREEP_SPAWN_OFFSET <const> = 100  -- Pixels to right of staging spot
+local CREEP_MOVE_SPEED <const> = 2
+local CREEP_SIZE <const> = 3  -- 4px sprite with 1px transparent edge
+
+-- Troop system constants
+local TROOP_RALLY_POINT <const> = (7-1) * 20 + 1  -- 7,1 position
+local TROOP_MOVE_SPEED <const> = 2
+local TROOP_SIZE_BASIC <const> = 3   -- 4px sprite with 1px transparent buffer
+local TROOP_SIZE_TIER1 <const> = 4   -- 5px sprite with 1px transparent buffer  
+local TROOP_SIZE_TIER2 <const> = 8   -- 9px sprite with 1px transparent buffer
+local TROOP_SIZE_TIER3 <const> = 8   -- 9px sprite with 1px transparent buffer
+local TROOP_MARCH_SPEED <const> = 2
+
 local Grid = {}
 
--- Sprite loading (Phase 2: Basic + Tier systems)
+-- ============================================================================
+-- SPRITE LOADING & INITIALIZATION
+-- ============================================================================
+
+-- Sprite loading (Basic + Tier + Creep + Troop systems)
 local function loadBubbleSprites()
-    local sprites = {basic = {}, tier1 = {}, tier2 = {}}
+    local sprites = {basic = {}, tier1 = {}, tier2 = {}, tier3 = {}, creeps = {}, troops = {}}
     
     -- Load basic sprites
     local basicSheet = gfx.image.new("assets/sprites/bubbles-basic")
@@ -64,8 +93,34 @@ local function loadBubbleSprites()
         gfx.popContext()
     end
     
+    -- Load tier 3 sprites
+    local tier3Sheet = gfx.image.new("assets/sprites/bubbles-tier-three")
+    local tier3Width, tier3Height = tier3Sheet:getSize()
+    for i = 1, 10 do
+        local spriteWidth = tier3Width / 10
+        sprites.tier3[i] = gfx.image.new(spriteWidth, tier3Height)
+        gfx.pushContext(sprites.tier3[i])
+        tier3Sheet:draw(-(i-1) * spriteWidth, 0)
+        gfx.popContext()
+    end
+    
+    -- Load creep sprites
+    sprites.creeps.basic = gfx.image.new("assets/sprites/creeps-basic")
+    sprites.creeps.tier1 = gfx.image.new("assets/sprites/creeps-tier-one")
+    sprites.creeps.tier2 = gfx.image.new("assets/sprites/creeps-tier-two")
+    
+    -- Load troop sprites
+    sprites.troops.basic = gfx.image.new("assets/sprites/troops-basic")
+    sprites.troops.tier1 = gfx.image.new("assets/sprites/troops-tier-one")
+    sprites.troops.tier2 = gfx.image.new("assets/sprites/troops-tier-two")
+    sprites.troops.tier3 = gfx.image.new("assets/sprites/troops-tier-three")
+    
     return sprites
 end
+
+-- ============================================================================
+-- CORE GAME SYSTEMS
+-- ============================================================================
 
 -- Initialize grid system
 function Grid:init()
@@ -146,7 +201,6 @@ function Grid:setupGameState()
     self.ball = nil
     self.shooterBallType = math.random(1, 5)
     self.onDeckBallType = math.random(1, 5)
-    self.shotCounter = 15
     self.gameState = "playing"
     self.showDebug = false
     
@@ -161,6 +215,17 @@ function Grid:setupGameState()
     self.tierTwoPositions = {}  -- {idx -> {centerX, centerY, sprite, pattern}}
     self.tierThreePositions = {} -- {idx -> {centerX, centerY, sprite, pattern}}
     self.magnetismDelayCounter = 0  -- 8-frame delay before checking magnetism
+    
+    -- Creep system
+    self.creeps = {}  -- {x, y, targetX, targetY, animating, staged, tier, size, marching}
+    self.stagingOccupied = {}  -- Track which staging positions are occupied
+    self.creepCycleCount = 0  -- Track shots for creep spawn cycles (1-5)
+    
+    -- Troop system
+    self.troops = {}  -- {x, y, targetX, targetY, tier, size, marching, rallied}
+    self.troopShotCounter = 0  -- Independent shot counter for troop cycles
+    self.rallyPointOccupied = {}  -- Track positions around rally point
+    self.troopMarchActive = false  -- Track when troops are in march mode
     
     -- Precompute aim direction
     self:updateAimDirection()
@@ -232,7 +297,7 @@ function Grid:handleInput()
     elseif pd.buttonJustPressed(pd.kButtonB) then
         self:init() -- Reset level to starting state
     elseif pd.buttonJustPressed(pd.kButtonA) and not self.ball and 
-           self.shotCounter > 0 and self.shooterBallType and not self.isAnimating then
+           self.shooterBallType and not self.isAnimating then
         self:shootBall()
     end
 end
@@ -247,6 +312,9 @@ function Grid:shootBall()
         vy = -self.aimSin * BALL_SPEED,
         ballType = self.shooterBallType
     }
+    
+    -- Handle creep spawning cycles
+    self:handleCreepCycle()
 end
 
 -- Main update loop
@@ -257,6 +325,8 @@ function Grid:update()
     end
     
     self:updateAnimations()
+    self:updateCreeps()
+    self:updateTroops()
     
     -- Handle magnetism delay counter (check Tier 3 first, then Tier 2)
     if self.magnetismDelayCounter > 0 then
@@ -324,29 +394,42 @@ function Grid:checkBallCollision()
                 local dx = self.ball.x - pos.x
                 local dy = self.ball.y - pos.y
                 local distSq = dx * dx + dy * dy
-                if distSq <= (COLLISION_RADIUS * COLLISION_RADIUS) then
+                if distSq <= (FLYING_BALL_RADIUS * FLYING_BALL_RADIUS) then
                     return true
                 end
             end
         end
     end
     
-    -- Check tier 1 bubbles (collision with center point)
+    -- Check tier 1 bubbles (collision with center point, 36x36 sprite)
     for idx, tierOneData in pairs(self.tierOnePositions) do
         local dx = self.ball.x - tierOneData.centerX
         local dy = self.ball.y - tierOneData.centerY
         local distSq = dx * dx + dy * dy
-        if distSq <= (COLLISION_RADIUS * COLLISION_RADIUS) then
+        local tier1Radius = 27 -- 36/2 + 9 for flying ball radius
+        if distSq <= (tier1Radius * tier1Radius) then
             return true
         end
     end
     
-    -- Check tier 2 bubbles (collision with center point)
+    -- Check tier 2 bubbles (collision with center point, 52x52 sprite)
     for idx, tierTwoData in pairs(self.tierTwoPositions) do
         local dx = self.ball.x - tierTwoData.centerX
         local dy = self.ball.y - tierTwoData.centerY
         local distSq = dx * dx + dy * dy
-        if distSq <= (COLLISION_RADIUS * COLLISION_RADIUS) then
+        local tier2Radius = 35 -- 52/2 + 9 for flying ball radius
+        if distSq <= (tier2Radius * tier2Radius) then
+            return true
+        end
+    end
+    
+    -- Check tier 3 bubbles (collision with center point, 84x84 sprite)
+    for idx, tierThreeData in pairs(self.tierThreePositions) do
+        local dx = self.ball.x - tierThreeData.centerX
+        local dy = self.ball.y - tierThreeData.centerY
+        local distSq = dx * dx + dy * dy
+        local tier3Radius = 51 -- 84/2 + 9 for flying ball radius
+        if distSq <= (tier3Radius * tier3Radius) then
             return true
         end
     end
@@ -364,21 +447,17 @@ function Grid:handleBallLanding()
         self.cells[landingIdx].occupied = true
         self.cells[landingIdx].tier = "basic"  -- Phase 2: New balls are basic tier
         self.ball = nil
-        self.shotCounter = self.shotCounter - 1
         
-        -- Advance to next ball
-        if self.shotCounter > 0 then
-            self.shooterBallType = self.onDeckBallType
-            if self.shotCounter > 1 then
-                self.onDeckBallType = math.random(1, 5)
-            end
-        else
-            -- No more shots - empty the shooter
-            self.shooterBallType = nil
-        end
+        -- Advance to next ball (infinite shots)
+        self.shooterBallType = self.onDeckBallType
+        self.onDeckBallType = math.random(1, 5)
         
         -- Check for merges
         self:checkForMerges(landingIdx)
+        
+        -- Handle troop spawning and shot counting (happens on every shot)
+        self:handleTroopShotCounting()
+        self:spawnTroopsForShot()
     else
         -- Failed placement - trigger game over sequence
         self:startGameOverSequence()
@@ -520,6 +599,8 @@ function Grid:updateAnimations()
             if progress >= 1.0 then
                 -- Complete tier 1 placement - use the animation's end coordinates
                 self:placeTierOne(anim.triangle, anim.ballType, anim.endX, anim.endY)
+                -- Spawn troop from newly created tier 1
+                self:spawnTroop(anim.endX, anim.endY, "tier1", TROOP_SIZE_TIER1)
                 -- Don't keep this animation
             else
                 activeAnimations[#activeAnimations + 1] = anim
@@ -550,6 +631,10 @@ function Grid:updateAnimations()
                     sprite = anim.sprite,
                     pattern = anim.pattern
                 }
+                
+                -- Spawn troop from newly created tier 2
+                self:spawnTroop(anim.endX, anim.endY, "tier2", TROOP_SIZE_TIER2)
+                
                 -- Don't keep this animation
             else
                 activeAnimations[#activeAnimations + 1] = anim
@@ -580,6 +665,10 @@ function Grid:updateAnimations()
                     sprite = anim.sprite,
                     pattern = anim.pattern
                 }
+                
+                -- Spawn troop from newly created tier 3
+                self:spawnTroop(anim.endX, anim.endY, "tier3", TROOP_SIZE_TIER3)
+                
                 -- Don't keep this animation
             else
                 activeAnimations[#activeAnimations + 1] = anim
@@ -593,6 +682,10 @@ function Grid:updateAnimations()
         self.isAnimating = false
     end
 end
+
+-- ============================================================================
+-- TIER PROGRESSION SYSTEMS
+-- ============================================================================
 
 -- Phase 2: Create Tier 1 bubble after basic merge
 function Grid:createTierOne(centerX, centerY, ballType)
@@ -970,7 +1063,7 @@ end
 
 -- Find valid Tier 2 placement near given position
 function Grid:findValidTierTwoPlacement(centerX, centerY)
-    local candidates = self:findNearestValidCells(centerX, centerY, 5)
+    local candidates = self:findNearestValidCells(centerX, centerY, 10)
     
     for _, candidate in ipairs(candidates) do
         local centerIdx = candidate.idx
@@ -996,12 +1089,13 @@ function Grid:findValidTierTwoPlacement(centerX, centerY)
         end
     end
     
+    print("ERROR: No valid Tier 2 placement found after checking " .. #candidates .. " candidates!")
     return nil, nil
 end
 
 -- Find valid Tier 3 placement near given position (19-cell pattern)
 function Grid:findValidTierThreePlacement(centerX, centerY)
-    local candidates = self:findNearestValidCells(centerX, centerY, 5)
+    local candidates = self:findNearestValidCells(centerX, centerY, 15)
     
     for _, candidate in ipairs(candidates) do
         local centerIdx = candidate.idx
@@ -1014,7 +1108,7 @@ function Grid:findValidTierThreePlacement(centerX, centerY)
             
             -- Add first ring (6 neighbors)
             for _, neighborIdx in ipairs(neighbors) do
-                if self.cells[neighborIdx] and not self.cells[neighborIdx].permanent then
+                if self.cells[neighborIdx] and not self.cells[neighborIdx].permanent and not self.cells[neighborIdx].occupied then
                     pattern[#pattern + 1] = neighborIdx
                 else
                     allValid = false
@@ -1022,35 +1116,35 @@ function Grid:findValidTierThreePlacement(centerX, centerY)
                 end
             end
             
-            -- Add second ring (12 neighbors of neighbors)
-            if allValid then
+            -- Add second ring (need 12 more for total of 19)
+            if allValid and #pattern == 7 then -- center + 6 neighbors
+                local secondRingCells = {}
+                
+                -- Collect all second-ring candidates
                 for _, firstRingIdx in ipairs(neighbors) do
                     local secondRing = self:getNeighbors(firstRingIdx)
                     for _, secondRingIdx in ipairs(secondRing) do
-                        -- Avoid duplicates and ensure valid
-                        local isDuplicate = false
-                        for _, existing in ipairs(pattern) do
-                            if existing == secondRingIdx then
-                                isDuplicate = true
-                                break
-                            end
-                        end
-                        
-                        if not isDuplicate and self.cells[secondRingIdx] and not self.cells[secondRingIdx].permanent then
-                            pattern[#pattern + 1] = secondRingIdx
-                            if #pattern >= 19 then break end -- Limit to 19 cells
+                        if not pattern[secondRingIdx] and self.cells[secondRingIdx] and 
+                           not self.cells[secondRingIdx].permanent and not self.cells[secondRingIdx].occupied then
+                            secondRingCells[#secondRingCells + 1] = secondRingIdx
                         end
                     end
-                    if #pattern >= 19 then break end
+                end
+                
+                -- Add exactly 12 second-ring cells (can stomp if needed)
+                for i = 1, math.min(12, #secondRingCells) do
+                    pattern[#pattern + 1] = secondRingCells[i]
                 end
                 
                 if #pattern >= 19 then
+                    print("TIER 3 PLACEMENT: Found " .. #pattern .. "-cell pattern at grid " .. self.positions[centerIdx].x .. "," .. self.positions[centerIdx].y)
                     return centerIdx, pattern
                 end
             end
         end
     end
     
+    print("ERROR: No valid Tier 3 placement found after checking " .. #candidates .. " candidates!")
     return nil, nil
 end
 
@@ -1132,11 +1226,149 @@ function Grid:updateGameOverFlash()
     end
 end
 
+-- Handle creep spawning cycles based on shot count
+-- ============================================================================
+-- ENEMY CREEP SYSTEMS
+-- ============================================================================
+
+function Grid:handleCreepCycle()
+    self.creepCycleCount = self.creepCycleCount + 1
+    
+    if self.creepCycleCount == 1 then
+        -- Shot 1: 5x Basic creeps
+        self:spawnCreeps(5, "basic", 3)
+    elseif self.creepCycleCount == 2 then
+        -- Shot 2: 3x Tier 1 creeps
+        self:spawnCreeps(3, "tier1", 4)
+    elseif self.creepCycleCount == 3 then
+        -- Shot 3: 2x Tier 2 creeps
+        self:spawnCreeps(2, "tier2", 8)
+    elseif self.creepCycleCount == 4 then
+        -- Shot 4: Start marching existing creeps left
+        self:startCreepMarch()
+    elseif self.creepCycleCount >= 5 then
+        -- Shot 5+: Reset cycle
+        self.creepCycleCount = 1
+        self:spawnCreeps(5, "basic", 3)
+    end
+end
+
+-- Spawn creeps with tier and size
+function Grid:spawnCreeps(count, tier, size)
+    local stagingIdx = self:findAvailableStaging()
+    if not stagingIdx then return end  -- No available staging positions
+    
+    local stagingPos = self.positions[stagingIdx]
+    self.stagingOccupied[stagingIdx] = true
+    
+    -- Spawn all creeps to the same rally point with random spawn offsets
+    for i = 1, count do
+        self.creeps[#self.creeps + 1] = {
+            x = stagingPos.x + CREEP_SPAWN_OFFSET + math.random(-10, 10),
+            y = stagingPos.y + math.random(-10, 10),
+            targetX = stagingPos.x,
+            targetY = stagingPos.y,
+            animating = true,
+            staged = false,
+            stagingIdx = stagingIdx,
+            tier = tier or "basic",
+            size = size or 3,
+            marching = false
+        }
+    end
+end
+
+-- Find available staging position (one with no creeps) - random selection
+function Grid:findAvailableStaging()
+    local available = {}
+    for _, idx in ipairs(CREEP_STAGING_POSITIONS) do
+        if not self.stagingOccupied[idx] then
+            available[#available + 1] = idx
+        end
+    end
+    
+    if #available > 0 then
+        return available[math.random(1, #available)]
+    end
+    return nil  -- All staging positions occupied
+end
+
+-- Start marching all creeps to the left
+function Grid:startCreepMarch()
+    for _, creep in ipairs(self.creeps) do
+        creep.marching = true
+        creep.animating = false
+    end
+end
+
+-- Update all creeps movement and collision
+function Grid:updateCreeps()
+    for i = #self.creeps, 1, -1 do
+        local creep = self.creeps[i]
+        
+        if creep.marching then
+            -- March left until offscreen
+            creep.x = creep.x - CREEP_MOVE_SPEED
+            
+            -- Remove if offscreen (left edge)
+            if creep.x < -20 then
+                -- Free up staging position if this was the last creep there
+                self:checkStagingAvailability(creep.stagingIdx)
+                table.remove(self.creeps, i)
+            end
+        elseif creep.animating then
+            -- Move toward target position
+            local dx = creep.targetX - creep.x
+            local dy = creep.targetY - creep.y
+            local dist = math.sqrt(dx*dx + dy*dy)
+            
+            if dist <= CREEP_MOVE_SPEED then
+                -- Reached target
+                creep.x = creep.targetX
+                creep.y = creep.targetY
+                creep.animating = false
+                creep.staged = true
+            else
+                -- Move toward target
+                creep.x = creep.x + (dx/dist) * CREEP_MOVE_SPEED
+                creep.y = creep.y + (dy/dist) * CREEP_MOVE_SPEED
+            end
+        end
+    end
+    
+    -- Handle all unit collisions (already called in updateTroops, avoid double calling)
+    -- self:resolveAllUnitCollisions()
+end
+
+-- Check if staging position should be freed (no more creeps there)
+function Grid:checkStagingAvailability(stagingIdx)
+    local hasCreeps = false
+    for _, creep in ipairs(self.creeps) do
+        if creep.stagingIdx == stagingIdx and not creep.marching then
+            hasCreeps = true
+            break
+        end
+    end
+    
+    if not hasCreeps then
+        self.stagingOccupied[stagingIdx] = nil
+    end
+end
+
+-- Prevent creeps from overlapping
+-- Old creep collision function removed - now handled by resolveAllUnitCollisions()
+
+-- ============================================================================
+-- RENDERING SYSTEMS
+-- ============================================================================
+
 -- Draw the complete game state
 function Grid:draw()
     self:drawGrid()
     self:drawBoundaries()
     self:drawBalls()
+    self:drawCreeps()
+    self:drawTroops()
     self:drawAnimations()
     self:drawUI()
     if self.gameState == "gameOver" then
@@ -1267,6 +1499,458 @@ function Grid:drawBalls()
     end
 end
 
+-- Draw all creeps
+function Grid:drawCreeps()
+    for _, creep in ipairs(self.creeps) do
+        local sprite = self.bubbleSprites.creeps.basic
+        local offset = creep.size / 2
+        
+        if creep.tier == "tier1" then
+            sprite = self.bubbleSprites.creeps.tier1 or sprite
+        elseif creep.tier == "tier2" then
+            sprite = self.bubbleSprites.creeps.tier2 or sprite
+        end
+        
+        sprite:draw(creep.x - offset, creep.y - offset)
+    end
+end
+-- ============================================================================
+-- ALLIED TROOP SYSTEMS  
+-- ============================================================================
+
+-- Spawn troops from all tier bubbles after shot landing
+function Grid:spawnTroopsFromBubbles()
+    local rallyPos = self.positions[TROOP_RALLY_POINT]
+    if not rallyPos then return end
+    
+    -- Spawn from Tier 1 bubbles
+    for idx, tierData in pairs(self.tierOnePositions) do
+        self:spawnTroop(tierData.centerX, tierData.centerY, "tier1", TROOP_SIZE_TIER1)
+    end
+    
+    -- Spawn from Tier 2 bubbles  
+    for idx, tierData in pairs(self.tierTwoPositions) do
+        self:spawnTroop(tierData.centerX, tierData.centerY, "tier2", TROOP_SIZE_TIER2)
+    end
+    
+    -- Spawn from Tier 3 bubbles
+    for idx, tierData in pairs(self.tierThreePositions) do
+        self:spawnTroop(tierData.centerX, tierData.centerY, "tier3", TROOP_SIZE_TIER3)
+    end
+end
+-- Spawn basic troops from 1/3 of basic bubbles (shots 2, 6, 10, etc.)
+function Grid:spawnBasicTroops()
+    local rallyPos = self.positions[TROOP_RALLY_POINT]
+    if not rallyPos then return end
+    
+    local basicBubbles = {}
+    for idx, cell in pairs(self.cells) do
+        if cell.occupied and cell.tier == "basic" then
+            basicBubbles[#basicBubbles + 1] = idx
+        end
+    end
+    
+    -- Spawn from 1/3 of basic bubbles
+    local spawnCount = math.max(1, math.floor(#basicBubbles / 3))
+    for i = 1, spawnCount do
+        local idx = basicBubbles[math.random(#basicBubbles)]
+        local pos = self.positions[idx]
+        if pos then
+            self:spawnTroop(pos.x, pos.y, "basic", TROOP_SIZE_BASIC)
+        end
+    end
+end
+-- Spawn individual troop at specified location
+function Grid:spawnTroop(spawnX, spawnY, tier, size)
+    local rallyPos = self.positions[TROOP_RALLY_POINT]
+    if not rallyPos then return end
+    
+    -- Check if we're in a march state (Turn 4 or any troops marching)
+    local shouldMarch = self:shouldNewTroopsMarch()
+    
+    self.troops[#self.troops + 1] = {
+        x = spawnX,
+        y = spawnY,
+        targetX = rallyPos.x,
+        targetY = rallyPos.y,
+        tier = tier,
+        size = size,
+        marching = shouldMarch,
+        rallied = false
+    }
+end
+-- Determine if newly spawned troops should march immediately
+function Grid:shouldNewTroopsMarch()
+    -- Check if we're in active march mode
+    if self.troopMarchActive then
+        return true
+    end
+    
+    -- Check if any existing troops are marching
+    for _, troop in ipairs(self.troops) do
+        if troop.marching then
+            return true
+        end
+    end
+    
+    return false
+end
+-- Update all troop movement
+function Grid:updateTroops()
+    for i = #self.troops, 1, -1 do
+        local troop = self.troops[i]
+        
+        if troop.marching then
+            -- March right until offscreen
+            troop.x = troop.x + TROOP_MARCH_SPEED
+            
+            -- Fan out vertically during first 200px of march
+            if not troop.fanOutStartX then
+                troop.fanOutStartX = troop.x  -- Record starting position for fan-out
+                -- Assign a stable march index for consistent spreading
+                if not troop.marchIndex then
+                    troop.marchIndex = self:assignMarchIndex(troop)
+                end
+                troop.fanOutTargetY = self:calculateFanOutY(troop, troop.marchIndex)
+            end
+            
+            local marchDistance = troop.x - troop.fanOutStartX
+            if marchDistance < 200 then
+                -- Fan out phase: move toward assigned Y position
+                local dy = troop.fanOutTargetY - troop.y
+                if math.abs(dy) > 1 then
+                    local newY = troop.y + math.sign(dy) * math.min(1, math.abs(dy))
+                    local clampedPos = self:clampToValidArea(troop.x, newY, troop.size)
+                    troop.y = clampedPos.y
+                end
+            end
+            
+            -- Remove if offscreen (right edge)
+            if troop.x > 420 then  -- Screen width + margin
+                table.remove(self.troops, i)
+            end
+        elseif not troop.rallied then
+            -- Find target: center of existing troop cluster or rally point if no troops
+            local clusterCenter = self:findTroopClusterCenter()
+            local targetX = clusterCenter.x
+            local targetY = clusterCenter.y
+            
+            -- Move toward cluster center
+            local dx = targetX - troop.x
+            local dy = targetY - troop.y
+            local dist = math.sqrt(dx*dx + dy*dy)
+            
+            if dist <= TROOP_MOVE_SPEED * 2 then  -- Larger threshold for cluster approach
+                -- Reached cluster area, join and trigger shuffle
+                troop.rallied = true
+                self:shuffleTroops(troop)
+            else
+                -- Move toward cluster center, but clamp to valid area
+                local newX = troop.x + (dx/dist) * TROOP_MOVE_SPEED
+                local newY = troop.y + (dy/dist) * TROOP_MOVE_SPEED
+                local clampedPos = self:clampToValidArea(newX, newY, troop.size)
+                troop.x = clampedPos.x
+                troop.y = clampedPos.y
+            end
+        end
+    end
+    
+    -- Handle all unit collisions (troops vs troops, troops vs creeps)
+    self:resolveAllUnitCollisions()
+    
+    -- Check if march is complete (no more marching troops)
+    if self.troopMarchActive then
+        local hasMatchingTroops = false
+        for _, troop in ipairs(self.troops) do
+            if troop.marching then
+                hasMatchingTroops = true
+                break
+            end
+        end
+        if not hasMatchingTroops then
+            self.troopMarchActive = false  -- Clear march mode
+        end
+    end
+end
+-- Find the target for approaching troops (anchored to rally point)
+function Grid:findTroopClusterCenter()
+    -- Always use the original rally point as anchor
+    local rallyPos = self.positions[TROOP_RALLY_POINT]
+    if not rallyPos then
+        return {x = 100, y = 100}  -- Fallback
+    end
+    
+    -- Clamp rally point to valid area in case it's too close to boundaries
+    local clampedRally = self:clampToValidArea(rallyPos.x, rallyPos.y, TROOP_SIZE_BASIC)
+    return {x = clampedRally.x, y = clampedRally.y}
+end
+-- Shuffle all rallied troops when a new one arrives (tighter packing)
+function Grid:shuffleTroops(newTroop)
+    local ralliedTroops = {}
+    for _, troop in ipairs(self.troops) do
+        if troop.rallied and not troop.marching then
+            ralliedTroops[#ralliedTroops + 1] = troop
+        end
+    end
+    
+    -- Find rally point anchor (not drifting cluster center)
+    local rallyAnchor = self:findTroopClusterCenter()
+    
+    -- Pack all troops tightly around rally anchor using tighter spacing
+    for i, troop in ipairs(ralliedTroops) do
+        local newPos = self:findTightPackPosition(rallyAnchor.x, rallyAnchor.y, troop.size, i)
+        troop.x = newPos.x
+        troop.y = newPos.y
+    end
+end
+-- Find tightly packed position for a troop respecting boundaries
+function Grid:findTightPackPosition(centerX, centerY, troopSize, troopIndex)
+    -- Try center first
+    if troopIndex == 1 then
+        local clampedPos = self:clampToValidArea(centerX, centerY, troopSize)
+        return {x = clampedPos.x, y = clampedPos.y}
+    end
+    
+    -- Pack in tight concentric circles with minimal spacing
+    local ring = math.ceil((troopIndex - 1) / 6)  -- 6 troops per ring max
+    local posInRing = ((troopIndex - 2) % 6) + 1
+    local ringRadius = ring * troopSize * 1.2  -- Tighter than original
+    local angleStep = (math.pi * 2) / 6
+    local angle = (posInRing - 1) * angleStep
+    
+    local testX = centerX + math.cos(angle) * ringRadius
+    local testY = centerY + math.sin(angle) * ringRadius
+    
+    -- Clamp to valid area (respect left edge and bottom boundary)
+    local clampedPos = self:clampToValidArea(testX, testY, troopSize)
+    return {x = clampedPos.x, y = clampedPos.y}
+end
+-- Clamp unit position to stay within valid screen area
+function Grid:clampToValidArea(x, y, unitSize)
+    local margin = unitSize / 2
+    local minX = LEFT_BOUNDARY + margin  -- Don't go past left edge
+    local maxX = 400 - margin  -- Right edge
+    local minY = 8 + margin   -- Top of grid (row 1)
+    local maxY = (13-1) * 16 + 8 + margin  -- Bottom of row 13 (avoid rows 14-15)
+    
+    return {
+        x = math.max(minX, math.min(maxX, x)),
+        y = math.max(minY, math.min(maxY, y))
+    }
+end
+-- Calculate vertical spread target for marching troops (avoid rows 14-15)
+function Grid:calculateFanOutY(troop, troopIndex)
+    -- Define valid Y range for rows 1-13
+    local row1Y = 8      -- Top of row 1
+    local row13Y = (13-1) * 16 + 8  -- Top of row 13
+    local validHeight = row13Y - row1Y
+    
+    -- Count how many troops are marching for even distribution
+    local marchingTroops = {}
+    for _, t in ipairs(self.troops) do
+        if t.marching then
+            marchingTroops[#marchingTroops + 1] = t
+        end
+    end
+    local marchingCount = #marchingTroops
+    
+    if marchingCount <= 1 then
+        return troop.y  -- No spreading needed for single troop
+    end
+    
+    -- Distribute evenly across the valid Y range
+    local spacing = validHeight / (marchingCount - 1)
+    local targetY = row1Y + (troopIndex - 1) * spacing
+    
+    -- Clamp to ensure we stay within valid bounds
+    local clampedPos = self:clampToValidArea(troop.x, targetY, troop.size)
+    return clampedPos.y
+end
+-- Assign a stable march index for consistent troop spreading
+function Grid:assignMarchIndex(targetTroop)
+    local marchingTroops = {}
+    for _, troop in ipairs(self.troops) do
+        if troop.marching then
+            marchingTroops[#marchingTroops + 1] = troop
+        end
+    end
+    
+    -- Find the position of our target troop in the list
+    for i, troop in ipairs(marchingTroops) do
+        if troop == targetTroop then
+            return i
+        end
+    end
+    
+    return 1  -- Fallback
+end
+-- Math helper: sign function
+function math.sign(x)
+    if x > 0 then return 1
+    elseif x < 0 then return -1
+    else return 0 end
+end
+-- Find available position around rally point (concentric spreading)
+function Grid:findSpreadPosition(centerX, centerY, troopSize)
+    -- Try center first
+    if not self:isTroopPositionOccupied(centerX, centerY, troopSize) then
+        self:markTroopPosition(centerX, centerY, troopSize, true)
+        return {x = centerX, y = centerY}
+    end
+    
+    -- Spread concentrically in increasing rings
+    for ring = 1, 5 do
+        local ringRadius = ring * troopSize * 2
+        for angle = 0, math.pi * 2 - 0.1, 0.3 do
+            local testX = centerX + math.cos(angle) * ringRadius
+            local testY = centerY + math.sin(angle) * ringRadius
+            
+            if not self:isTroopPositionOccupied(testX, testY, troopSize) then
+                self:markTroopPosition(testX, testY, troopSize, true)
+                return {x = testX, y = testY}
+            end
+        end
+    end
+    
+    -- Fallback to original position if no space found
+    return {x = centerX, y = centerY}
+end
+-- Check if position is occupied by another troop
+function Grid:isTroopPositionOccupied(x, y, size)
+    for _, troop in ipairs(self.troops) do
+        if troop.rallied and not troop.marching then
+            local dx = troop.x - x
+            local dy = troop.y - y
+            local dist = math.sqrt(dx*dx + dy*dy)
+            if dist < (size + troop.size) then
+                return true
+            end
+        end
+    end
+    return false
+end
+-- Mark position as occupied (for rally point management)
+function Grid:markTroopPosition(x, y, size, occupied)
+    -- This could be expanded for more sophisticated position tracking
+    -- For now, collision detection handles overlap prevention
+end
+-- Start marching all rallied troops to the right
+function Grid:marchTroopsOffscreen()
+    self.troopMarchActive = true  -- Set march mode flag
+    for _, troop in ipairs(self.troops) do
+        if troop.rallied then
+            troop.marching = true
+        end
+    end
+end
+-- Unified collision system for all units (troops vs troops, troops vs creeps, creeps vs creeps)
+function Grid:resolveAllUnitCollisions()
+    -- Create a unified list of all units with their properties
+    local allUnits = {}
+    
+    -- Add all troops
+    for _, troop in ipairs(self.troops) do
+        allUnits[#allUnits + 1] = {
+            x = troop.x,
+            y = troop.y,
+            size = troop.size,
+            unit = troop,
+            type = "troop",
+            marching = troop.marching,
+            rallied = troop.rallied or false
+        }
+    end
+    
+    -- Add all creeps
+    for _, creep in ipairs(self.creeps) do
+        allUnits[#allUnits + 1] = {
+            x = creep.x,
+            y = creep.y,
+            size = creep.size,
+            unit = creep,
+            type = "creep",
+            marching = creep.marching,
+            rallied = false  -- Creeps don't rally
+        }
+    end
+    
+    -- Check all pairs for collision
+    for i = 1, #allUnits do
+        for j = i+1, #allUnits do
+            local u1, u2 = allUnits[i], allUnits[j]
+            local dx = u2.x - u1.x
+            local dy = u2.y - u1.y
+            local dist = math.sqrt(dx*dx + dy*dy)
+            
+            -- Calculate minimum distance respecting 1px buffers
+            -- Each unit's size already accounts for the 1px buffer
+            local minDist = u1.size + u2.size
+            
+            -- Special case: allow tighter packing for rallied troops only
+            if u1.type == "troop" and u2.type == "troop" and u1.rallied and u2.rallied 
+               and not u1.marching and not u2.marching then
+                minDist = minDist * 0.8  -- Tighter rally formation
+            end
+            
+            if dist < minDist and dist > 0 then
+                -- Calculate push force
+                local pushDist = (minDist - dist) / 2
+                local pushX = (dx/dist) * pushDist
+                local pushY = (dy/dist) * pushDist
+                
+                -- Apply push (update original unit positions)
+                u1.unit.x = u1.unit.x - pushX
+                u1.unit.y = u1.unit.y - pushY
+                u2.unit.x = u2.unit.x + pushX
+                u2.unit.y = u2.unit.y + pushY
+                
+                -- Update the working copies for this frame
+                u1.x = u1.unit.x
+                u1.y = u1.unit.y
+                u2.x = u2.unit.x
+                u2.y = u2.unit.y
+            end
+        end
+    end
+end
+-- Draw all troops
+function Grid:drawTroops()
+    for _, troop in ipairs(self.troops) do
+        local sprite = self.bubbleSprites.troops.basic
+        local offset = troop.size / 2
+        
+        if troop.tier == "tier1" then
+            sprite = self.bubbleSprites.troops.tier1 or sprite
+        elseif troop.tier == "tier2" then
+            sprite = self.bubbleSprites.troops.tier2 or sprite
+        elseif troop.tier == "tier3" then
+            sprite = self.bubbleSprites.troops.tier3 or sprite
+        end
+        
+        sprite:draw(troop.x - offset, troop.y - offset)
+    end
+end
+-- Handle troop shot counting and cycle management
+function Grid:handleTroopShotCounting()
+    self.troopShotCounter = self.troopShotCounter + 1
+    
+    -- Shot 4: march all troops off screen and reset cycle
+    if self.troopShotCounter == 4 then
+        self:marchTroopsOffscreen()
+        self.troopShotCounter = 0  -- Reset for next cycle
+    end
+end
+-- Spawn troops when merges/tiers complete (called from animation completions)
+function Grid:spawnTroopsForShot()
+    -- Always spawn from existing tier bubbles
+    self:spawnTroopsFromBubbles()
+    
+    -- Shots 2, 6, 10, etc.: also spawn from 1/3 of basic bubbles
+    if self.troopShotCounter == 2 or (self.troopShotCounter > 2 and (self.troopShotCounter - 2) % 4 == 0) then
+        self:spawnBasicTroops()
+    end
+end
+
 -- Draw active animations
 function Grid:drawAnimations()
     for _, anim in ipairs(self.animations) do
@@ -1308,20 +1992,10 @@ end
 
 -- Draw UI elements
 function Grid:drawUI()
-    -- On-deck ball
-    if self.shotCounter > 1 then
-        local onDeckPos = self.positions[(15 - 1) * 20 + 17]
-        if onDeckPos then
-            self.bubbleSprites.basic[self.onDeckBallType]:draw(onDeckPos.x - 10, onDeckPos.y - 10)
-        end
-    end
-    
-    -- Shot counter
-    if self.shotCounter > 0 then
-        local onDeckPos = self.positions[(15 - 1) * 20 + 17]
-        if onDeckPos then
-            gfx.drawText(self.shotCounter, onDeckPos.x + 25, onDeckPos.y - 8)
-        end
+    -- On-deck ball (always show with infinite shots)
+    local onDeckPos = self.positions[(15 - 1) * 20 + 17]
+    if onDeckPos then
+        self.bubbleSprites.basic[self.onDeckBallType]:draw(onDeckPos.x - 10, onDeckPos.y - 10)
     end
 end
 

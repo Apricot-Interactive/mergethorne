@@ -11,10 +11,12 @@
 
 ### 🚀 Performance Optimizations
 
-#### Collision Detection
-- **Current**: O(n) collision check for each ball against all placed bubbles
-- **Optimization**: Cache collision cells in ball's path for O(1) lookup
-- **Impact**: Better performance when many tier bubbles are placed
+#### Collision Detection Cache
+- **Current**: `checkBallCollision()` iterates all ~300 cells via `pairs(self.cells)` each frame
+- **Analysis**: Must handle edge cases - animating cells, multi-tier positions, dynamic state changes  
+- **Optimization**: Cache arrays: `basicCollisions[]`, `tier1Collisions[]`, `tier2Collisions[]`
+- **Invalidation**: On ball placement, animation completion, tier transitions
+- **Impact**: 6-10x performance improvement (20-50 collision checks vs 300 cell iteration)
 
 #### Animation System  
 - **Current**: Single animation array processed every frame
@@ -50,12 +52,14 @@
 - **Add**: Bounds checking for invalid grid positions
 - **Add**: Graceful degradation for memory issues
 
-#### Constants Organization
+#### Constants Organization ✅ **COMPLETED**
+- **Added**: `MergeConstants.lua` module with tier combinations, sprite info, helper functions  
+- **Remaining**: Replace hardcoded sprite offsets (-10, -18, -26, -42) with `MergeConstants.getSpriteOffset()`
+- **Remaining**: Move grid constants (AIM_LINE_LENGTH, COLLISION_RADIUS) to MergeConstants for consistency
 ```lua
--- Move magic numbers to constants section:
-local MAGNETIC_RANGE <const> = 60
-local TIER_TWO_PATTERN_SIZE <const> = 7
-local TRIANGLE_SIZE <const> = 3
+-- Already implemented:
+MergeConstants.SPRITE_INFO = {basic={size=20, offset=-10}, tier1={size=36, offset=-18}...}
+MergeConstants.getTierTwoSprite(type1, type2)
 ```
 
 #### Function Size Optimization
