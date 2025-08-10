@@ -42,7 +42,13 @@ local CREEP_MOVE_SPEED <const> = 2
 local CREEP_SIZE <const> = 3  -- 4px sprite with 1px transparent edge
 
 -- Troop system constants
-local TROOP_RALLY_POINT <const> = (7-1) * 20 + 1  -- 7,1 position
+-- Multiple rally points to reduce clustering and jitter
+local TROOP_RALLY_POINTS <const> = {
+    (6-1) * 20 + 1,  -- 6,1 position
+    (7-1) * 20 + 1,  -- 7,1 position  
+    (7-1) * 20 + 2,  -- 7,2 position
+    (8-1) * 20 + 1   -- 8,1 position
+}
 local TROOP_MOVE_SPEED <const> = 2
 local TROOP_SIZE_BASIC <const> = 3   -- 4px sprite with 1px transparent buffer
 local TROOP_SIZE_TIER1 <const> = 4   -- 5px sprite with 1px transparent buffer  
@@ -600,7 +606,8 @@ function Grid:updateAnimations()
                 -- Complete tier 1 placement - use the animation's end coordinates
                 self:placeTierOne(anim.triangle, anim.ballType, anim.endX, anim.endY)
                 -- Spawn troop from newly created tier 1
-                self:spawnTroop(anim.endX, anim.endY, "tier1", TROOP_SIZE_TIER1)
+                local rallyPos = self:getRandomRallyPoint()
+                self:spawnTroop(anim.endX, anim.endY, "tier1", TROOP_SIZE_TIER1, rallyPos)
                 -- Don't keep this animation
             else
                 activeAnimations[#activeAnimations + 1] = anim
@@ -633,7 +640,8 @@ function Grid:updateAnimations()
                 }
                 
                 -- Spawn troop from newly created tier 2
-                self:spawnTroop(anim.endX, anim.endY, "tier2", TROOP_SIZE_TIER2)
+                local rallyPos = self:getRandomRallyPoint()
+                self:spawnTroop(anim.endX, anim.endY, "tier2", TROOP_SIZE_TIER2, rallyPos)
                 
                 -- Don't keep this animation
             else
@@ -651,6 +659,24 @@ function Grid:updateAnimations()
             end
         elseif anim.type == "tier3_snap" then
             if progress >= 1.0 then
+                -- Clear any stomped tier bubbles from tracking tables before placing tier 3
+                for _, idx in ipairs(anim.pattern) do
+                    -- Remove from tier 1 positions if stomped
+                    if self.tierOnePositions[idx] then
+                        self.tierOnePositions[idx] = nil
+                    end
+                    
+                    -- Remove from tier 2 positions if stomped (check all patterns)
+                    for tierIdx, tierData in pairs(self.tierTwoPositions) do
+                        for _, patternIdx in ipairs(tierData.pattern) do
+                            if patternIdx == idx then
+                                self.tierTwoPositions[tierIdx] = nil
+                                break
+                            end
+                        end
+                    end
+                end
+                
                 -- Complete grid snapping - mark all pattern cells as tier 3
                 for _, idx in ipairs(anim.pattern) do
                     self.cells[idx].ballType = anim.sprite
@@ -667,7 +693,8 @@ function Grid:updateAnimations()
                 }
                 
                 -- Spawn troop from newly created tier 3
-                self:spawnTroop(anim.endX, anim.endY, "tier3", TROOP_SIZE_TIER3)
+                local rallyPos = self:getRandomRallyPoint()
+                self:spawnTroop(anim.endX, anim.endY, "tier3", TROOP_SIZE_TIER3, rallyPos)
                 
                 -- Don't keep this animation
             else
@@ -1095,7 +1122,7 @@ end
 
 -- Find valid Tier 3 placement near given position (19-cell pattern)
 function Grid:findValidTierThreePlacement(centerX, centerY)
-    local candidates = self:findNearestValidCells(centerX, centerY, 15)
+    local candidates = self:findNearestValidCells(centerX, centerY, 30)
     
     for _, candidate in ipairs(candidates) do
         local centerIdx = candidate.idx
@@ -1106,13 +1133,22 @@ function Grid:findValidTierThreePlacement(centerX, centerY)
             local pattern = {centerIdx} -- Start with center
             local allValid = true
             
-            -- Add first ring (6 neighbors)
-            for _, neighborIdx in ipairs(neighbors) do
-                if self.cells[neighborIdx] and not self.cells[neighborIdx].permanent and not self.cells[neighborIdx].occupied then
-                    pattern[#pattern + 1] = neighborIdx
-                else
-                    allValid = false
-                    break
+            -- Check if center is valid (not permanent boundary, not shooter, not tier3)
+            if self.cells[centerIdx].permanent or centerIdx == SHOOTER_IDX or 
+               (self.cells[centerIdx].occupied and self.cells[centerIdx].tier == "tier3") then
+                allValid = false
+            end
+            
+            -- Add first ring (6 neighbors) - allow stomping basic/tier1/tier2
+            if allValid then
+                for _, neighborIdx in ipairs(neighbors) do
+                    if self.cells[neighborIdx] and not self.cells[neighborIdx].permanent and neighborIdx ~= SHOOTER_IDX and
+                       not (self.cells[neighborIdx].occupied and self.cells[neighborIdx].tier == "tier3") then
+                        pattern[#pattern + 1] = neighborIdx
+                    else
+                        allValid = false
+                        break
+                    end
                 end
             end
             
@@ -1120,18 +1156,29 @@ function Grid:findValidTierThreePlacement(centerX, centerY)
             if allValid and #pattern == 7 then -- center + 6 neighbors
                 local secondRingCells = {}
                 
-                -- Collect all second-ring candidates
+                -- Collect all second-ring candidates - allow stomping basic/tier1/tier2
                 for _, firstRingIdx in ipairs(neighbors) do
                     local secondRing = self:getNeighbors(firstRingIdx)
                     for _, secondRingIdx in ipairs(secondRing) do
-                        if not pattern[secondRingIdx] and self.cells[secondRingIdx] and 
-                           not self.cells[secondRingIdx].permanent and not self.cells[secondRingIdx].occupied then
+                        -- Skip if already in pattern
+                        local alreadyInPattern = false
+                        for _, patternIdx in ipairs(pattern) do
+                            if patternIdx == secondRingIdx then
+                                alreadyInPattern = true
+                                break
+                            end
+                        end
+                        
+                        -- Allow if not permanent, not shooter, not tier3
+                        if not alreadyInPattern and self.cells[secondRingIdx] and 
+                           not self.cells[secondRingIdx].permanent and secondRingIdx ~= SHOOTER_IDX and
+                           not (self.cells[secondRingIdx].occupied and self.cells[secondRingIdx].tier == "tier3") then
                             secondRingCells[#secondRingCells + 1] = secondRingIdx
                         end
                     end
                 end
                 
-                -- Add exactly 12 second-ring cells (can stomp if needed)
+                -- Add exactly 12 second-ring cells (will stomp basic/tier1/tier2 if needed)
                 for i = 1, math.min(12, #secondRingCells) do
                     pattern[#pattern + 1] = secondRingCells[i]
                 end
@@ -1518,31 +1565,35 @@ end
 -- ALLIED TROOP SYSTEMS  
 -- ============================================================================
 
+-- Get a random rally point position
+function Grid:getRandomRallyPoint()
+    local rallyIdx = TROOP_RALLY_POINTS[math.random(#TROOP_RALLY_POINTS)]
+    return self.positions[rallyIdx]
+end
+
 -- Spawn troops from all tier bubbles after shot landing
 function Grid:spawnTroopsFromBubbles()
-    local rallyPos = self.positions[TROOP_RALLY_POINT]
-    if not rallyPos then return end
     
     -- Spawn from Tier 1 bubbles
     for idx, tierData in pairs(self.tierOnePositions) do
-        self:spawnTroop(tierData.centerX, tierData.centerY, "tier1", TROOP_SIZE_TIER1)
+        local rallyPos = self:getRandomRallyPoint()
+        self:spawnTroop(tierData.centerX, tierData.centerY, "tier1", TROOP_SIZE_TIER1, rallyPos)
     end
     
     -- Spawn from Tier 2 bubbles  
     for idx, tierData in pairs(self.tierTwoPositions) do
-        self:spawnTroop(tierData.centerX, tierData.centerY, "tier2", TROOP_SIZE_TIER2)
+        local rallyPos = self:getRandomRallyPoint()
+        self:spawnTroop(tierData.centerX, tierData.centerY, "tier2", TROOP_SIZE_TIER2, rallyPos)
     end
     
     -- Spawn from Tier 3 bubbles
     for idx, tierData in pairs(self.tierThreePositions) do
-        self:spawnTroop(tierData.centerX, tierData.centerY, "tier3", TROOP_SIZE_TIER3)
+        local rallyPos = self:getRandomRallyPoint()
+        self:spawnTroop(tierData.centerX, tierData.centerY, "tier3", TROOP_SIZE_TIER3, rallyPos)
     end
 end
 -- Spawn basic troops from 1/3 of basic bubbles (shots 2, 6, 10, etc.)
 function Grid:spawnBasicTroops()
-    local rallyPos = self.positions[TROOP_RALLY_POINT]
-    if not rallyPos then return end
-    
     local basicBubbles = {}
     for idx, cell in pairs(self.cells) do
         if cell.occupied and cell.tier == "basic" then
@@ -1556,13 +1607,13 @@ function Grid:spawnBasicTroops()
         local idx = basicBubbles[math.random(#basicBubbles)]
         local pos = self.positions[idx]
         if pos then
-            self:spawnTroop(pos.x, pos.y, "basic", TROOP_SIZE_BASIC)
+            local rallyPos = self:getRandomRallyPoint()
+            self:spawnTroop(pos.x, pos.y, "basic", TROOP_SIZE_BASIC, rallyPos)
         end
     end
 end
 -- Spawn individual troop at specified location
-function Grid:spawnTroop(spawnX, spawnY, tier, size)
-    local rallyPos = self.positions[TROOP_RALLY_POINT]
+function Grid:spawnTroop(spawnX, spawnY, tier, size, rallyPos)
     if not rallyPos then return end
     
     -- Check if we're in a march state (Turn 4 or any troops marching)
@@ -1576,24 +1627,15 @@ function Grid:spawnTroop(spawnX, spawnY, tier, size)
         tier = tier,
         size = size,
         marching = shouldMarch,
-        rallied = false
+        rallied = false,
+        rallyPoint = rallyPos  -- Store assigned rally point
     }
 end
 -- Determine if newly spawned troops should march immediately
 function Grid:shouldNewTroopsMarch()
-    -- Check if we're in active march mode
-    if self.troopMarchActive then
-        return true
-    end
-    
-    -- Check if any existing troops are marching
-    for _, troop in ipairs(self.troops) do
-        if troop.marching then
-            return true
-        end
-    end
-    
-    return false
+    -- Only march if we're actively in shot 4 cycle (troopShotCounter just reset to 0)
+    -- This prevents shot 5+ troops from marching while shot 4 troops are still moving
+    return self.troopMarchActive and self.troopShotCounter == 0
 end
 -- Update all troop movement
 function Grid:updateTroops()
@@ -1630,8 +1672,8 @@ function Grid:updateTroops()
                 table.remove(self.troops, i)
             end
         elseif not troop.rallied then
-            -- Find target: center of existing troop cluster or rally point if no troops
-            local clusterCenter = self:findTroopClusterCenter()
+            -- Find target: use troop's assigned rally point  
+            local clusterCenter = self:findTroopClusterCenter(troop)
             local targetX = clusterCenter.x
             local targetY = clusterCenter.y
             
@@ -1640,7 +1682,7 @@ function Grid:updateTroops()
             local dy = targetY - troop.y
             local dist = math.sqrt(dx*dx + dy*dy)
             
-            if dist <= TROOP_MOVE_SPEED * 2 then  -- Larger threshold for cluster approach
+            if dist <= TROOP_MOVE_SPEED * 4 then  -- Even larger threshold for looser rally clusters
                 -- Reached cluster area, join and trigger shuffle
                 troop.rallied = true
                 self:shuffleTroops(troop)
@@ -1672,37 +1714,103 @@ function Grid:updateTroops()
         end
     end
 end
--- Find the target for approaching troops (anchored to rally point)
-function Grid:findTroopClusterCenter()
-    -- Always use the original rally point as anchor
-    local rallyPos = self.positions[TROOP_RALLY_POINT]
-    if not rallyPos then
-        return {x = 100, y = 100}  -- Fallback
+-- Find the target for approaching troops (use their assigned rally point)
+function Grid:findTroopClusterCenter(approachingTroop)
+    -- Use the approaching troop's assigned rally point
+    if approachingTroop and approachingTroop.rallyPoint then
+        local clampedRally = self:clampToValidArea(approachingTroop.rallyPoint.x, approachingTroop.rallyPoint.y, TROOP_SIZE_BASIC)
+        return {x = clampedRally.x, y = clampedRally.y}
     end
     
-    -- Clamp rally point to valid area in case it's too close to boundaries
-    local clampedRally = self:clampToValidArea(rallyPos.x, rallyPos.y, TROOP_SIZE_BASIC)
-    return {x = clampedRally.x, y = clampedRally.y}
+    -- Fallback to first rally point if no specific assignment
+    local rallyPos = self:getRandomRallyPoint()
+    if rallyPos then
+        local clampedRally = self:clampToValidArea(rallyPos.x, rallyPos.y, TROOP_SIZE_BASIC)
+        return {x = clampedRally.x, y = clampedRally.y}
+    end
+    
+    return {x = 100, y = 100}  -- Final fallback
 end
--- Shuffle all rallied troops when a new one arrives (tighter packing)
+-- Shuffle troops at the same rally point when a new one arrives (gentler packing)
 function Grid:shuffleTroops(newTroop)
-    local ralliedTroops = {}
+    -- Only shuffle troops assigned to the same rally point as the new troop
+    local sameRallyTroops = {}
     for _, troop in ipairs(self.troops) do
-        if troop.rallied and not troop.marching then
-            ralliedTroops[#ralliedTroops + 1] = troop
+        if troop.rallied and not troop.marching and troop.rallyPoint then
+            -- Check if troops share the same rally point
+            if newTroop.rallyPoint and 
+               troop.rallyPoint.x == newTroop.rallyPoint.x and 
+               troop.rallyPoint.y == newTroop.rallyPoint.y then
+                sameRallyTroops[#sameRallyTroops + 1] = troop
+            end
         end
     end
     
-    -- Find rally point anchor (not drifting cluster center)
-    local rallyAnchor = self:findTroopClusterCenter()
+    -- Use the new troop's assigned rally point as anchor
+    local rallyAnchor = self:findTroopClusterCenter(newTroop)
     
-    -- Pack all troops tightly around rally anchor using tighter spacing
-    for i, troop in ipairs(ralliedTroops) do
-        local newPos = self:findTightPackPosition(rallyAnchor.x, rallyAnchor.y, troop.size, i)
-        troop.x = newPos.x
-        troop.y = newPos.y
+    -- Pack troops around their specific rally anchor with gentler spacing
+    for i, troop in ipairs(sameRallyTroops) do
+        local targetPos = self:findTightPackPosition(rallyAnchor.x, rallyAnchor.y, troop.size, i)
+        -- Gentle movement instead of instant snap
+        self:moveTowardsGently(troop, targetPos.x, targetPos.y)
     end
 end
+
+-- Check if troop position would violate 1px gap around tier bubbles
+function Grid:checkTroopTierBubbleGap(x, y, troopSize)
+    local troopRadius = troopSize / 2
+    
+    -- Check against Tier 1 bubbles
+    for idx, tierData in pairs(self.tierOnePositions) do
+        local dx = tierData.centerX - x
+        local dy = tierData.centerY - y
+        local dist = math.sqrt(dx*dx + dy*dy)
+        local minDist = troopRadius + 10 + 1  -- Tier 1 radius (10px) + troop radius + 1px gap
+        if dist < minDist then
+            return false  -- Too close to tier 1 bubble
+        end
+    end
+    
+    -- Check against Tier 2 bubbles  
+    for idx, tierData in pairs(self.tierTwoPositions) do
+        local dx = tierData.centerX - x
+        local dy = tierData.centerY - y
+        local dist = math.sqrt(dx*dx + dy*dy)
+        local minDist = troopRadius + 15 + 1  -- Tier 2 radius (~15px) + troop radius + 1px gap
+        if dist < minDist then
+            return false  -- Too close to tier 2 bubble
+        end
+    end
+    
+    -- Check against Tier 3 bubbles
+    for idx, tierData in pairs(self.tierThreePositions) do
+        local dx = tierData.centerX - x
+        local dy = tierData.centerY - y
+        local dist = math.sqrt(dx*dx + dy*dy)
+        local minDist = troopRadius + 20 + 1  -- Tier 3 radius (~20px) + troop radius + 1px gap
+        if dist < minDist then
+            return false  -- Too close to tier 3 bubble
+        end
+    end
+    
+    return true  -- Position is safe with 1px gap
+end
+
+-- Move troop gently towards target position to reduce jitter
+function Grid:moveTowardsGently(troop, targetX, targetY)
+    local dx = targetX - troop.x
+    local dy = targetY - troop.y
+    local dist = math.sqrt(dx*dx + dy*dy)
+    
+    -- Only move if we're more than 1 pixel away
+    if dist > 1 then
+        -- Move slowly towards target (1/4 the distance each frame)
+        troop.x = troop.x + dx * 0.25
+        troop.y = troop.y + dy * 0.25
+    end
+end
+
 -- Find tightly packed position for a troop respecting boundaries
 function Grid:findTightPackPosition(centerX, centerY, troopSize, troopIndex)
     -- Try center first
@@ -1711,15 +1819,33 @@ function Grid:findTightPackPosition(centerX, centerY, troopSize, troopIndex)
         return {x = clampedPos.x, y = clampedPos.y}
     end
     
-    -- Pack in tight concentric circles with minimal spacing
+    -- Pack in concentric circles with better spacing to avoid tier bubbles
     local ring = math.ceil((troopIndex - 1) / 6)  -- 6 troops per ring max
     local posInRing = ((troopIndex - 2) % 6) + 1
-    local ringRadius = ring * troopSize * 1.2  -- Tighter than original
+    local ringRadius = ring * troopSize * 2.5  -- Increased spacing to maintain 1px gap from tier bubbles
     local angleStep = (math.pi * 2) / 6
     local angle = (posInRing - 1) * angleStep
     
+    -- Add small random offset to prevent perfect alignment and oscillation
+    angle = angle + (math.random() - 0.5) * 0.3
+    
     local testX = centerX + math.cos(angle) * ringRadius
     local testY = centerY + math.sin(angle) * ringRadius
+    
+    -- Check if position respects 1px gap around tier bubbles
+    if not self:checkTroopTierBubbleGap(testX, testY, troopSize) then
+        -- If too close to tier bubbles, try wider spacing (crowded override)
+        ringRadius = ringRadius * 1.5
+        testX = centerX + math.cos(angle) * ringRadius
+        testY = centerY + math.sin(angle) * ringRadius
+        
+        -- If still too close and really crowded, allow it but warn with wider spacing
+        if not self:checkTroopTierBubbleGap(testX, testY, troopSize) then
+            ringRadius = ringRadius * 1.3  -- Extra spacing for crowded situations
+            testX = centerX + math.cos(angle) * ringRadius
+            testY = centerY + math.sin(angle) * ringRadius
+        end
+    end
     
     -- Clamp to valid area (respect left edge and bottom boundary)
     local clampedPos = self:clampToValidArea(testX, testY, troopSize)
