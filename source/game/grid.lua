@@ -22,7 +22,12 @@ local BALL_SPEED <const> = 9
 local COLLISION_RADIUS <const> = 20
 local FLYING_BALL_RADIUS <const> = 18  -- 2px smaller for tighter gaps
 local AIM_LINE_LENGTH <const> = 50
-local SHOOTER_IDX <const> = 12 * 20 + 16  -- Bottom center
+-- Shooter system constants - now free-floating on vertical line
+local SHOOTER_X <const> = 320  -- Vertical line bisecting even row cell 16 midpoints
+local SHOOTER_Y_MIN <const> = 8    -- Top of grid (row 1)
+local SHOOTER_Y_MAX <const> = 200  -- Bottom of row 13  
+local SHOOTER_Y_INITIAL <const> = 104  -- Midpoint of movement range
+local CRANK_TO_MOVEMENT <const> = 96/360  -- 360° crank = 96px (half range)
 local TOP_BOUNDARY <const> = 8
 local BOTTOM_BOUNDARY <const> = 200
 local LEFT_BOUNDARY <const> = 10
@@ -197,18 +202,21 @@ function Grid:setupBoundaries()
         end
     end
     
-    -- Shooter position is permanent but special
-    self.cells[SHOOTER_IDX].permanent = true
+    -- Cell 13,16 (former shooter position) is now a legal playable space
 end
 
 -- Initialize game state variables
 function Grid:setupGameState()
-    self.angle = 45
+    self.angle = 0
     self.ball = nil
     self.shooterBallType = math.random(1, 5)
     self.onDeckBallType = math.random(1, 5)
     self.gameState = "playing"
     self.showDebug = false
+    
+    -- Free-floating shooter position
+    self.shooterX = SHOOTER_X
+    self.shooterY = SHOOTER_Y_INITIAL
     
     -- Animation system (extensible for Phase 2)
     self.animations = {}
@@ -291,14 +299,41 @@ function Grid:handleInput()
         return
     end
     
-    -- Aim adjustment
-    if pd.buttonIsPressed(pd.kButtonUp) and self.angle < 86 then
+    -- Shooter positioning via crank
+    local crankChange = pd.getCrankChange()
+    if math.abs(crankChange) > 0.1 then  -- Ignore tiny movements
+        -- Crank up (positive) moves shooter up (decrease Y)
+        -- Crank down (negative) moves shooter down (increase Y)
+        self.shooterY = self.shooterY - (crankChange * CRANK_TO_MOVEMENT)
+        self.shooterY = math.max(SHOOTER_Y_MIN, math.min(SHOOTER_Y_MAX, self.shooterY))
+    end
+    
+    -- Aim adjustment via D-pad (271° to 89° range, prevents shooting right)
+    if pd.buttonIsPressed(pd.kButtonUp) then
         self.angle = self.angle + 2
+        -- Handle wrapping from 359° to 0° and continue to 89°
+        if self.angle >= 360 then
+            self.angle = self.angle - 360  -- 360° becomes 0°, 362° becomes 2°
+        end
+        -- Only clamp if we're in the valid low range and hit the upper limit
+        if self.angle > 89 and self.angle < 271 then
+            self.angle = 89  -- Clamp at upper limit
+        end
         self:updateAimDirection()
-    elseif pd.buttonIsPressed(pd.kButtonDown) and self.angle > 1 then
+    elseif pd.buttonIsPressed(pd.kButtonDown) then
         self.angle = self.angle - 2
+        -- Handle wrapping from 0° to 359°
+        if self.angle < 0 then
+            self.angle = self.angle + 360  -- -2° becomes 358°
+        end
+        -- Only clamp if we're in the valid high range and hit the lower limit
+        if self.angle < 271 and self.angle > 89 then
+            self.angle = 271  -- Clamp at lower limit
+        end
         self:updateAimDirection()
-    elseif pd.buttonJustPressed(pd.kButtonLeft) then
+    end
+    
+    if pd.buttonJustPressed(pd.kButtonLeft) then
         self.showDebug = not self.showDebug
     elseif pd.buttonJustPressed(pd.kButtonB) then
         self:init() -- Reset level to starting state
@@ -310,13 +345,13 @@ end
 
 -- Fire a ball from shooter position  
 function Grid:shootBall()
-    local shooterPos = self.positions[SHOOTER_IDX]
     self.ball = {
-        x = shooterPos.x,
-        y = shooterPos.y,
+        x = self.shooterX,
+        y = self.shooterY,
         vx = -self.aimCos * BALL_SPEED,
         vy = -self.aimSin * BALL_SPEED,
-        ballType = self.shooterBallType
+        ballType = self.shooterBallType,
+        bounces = 0  -- Track bounce count (max 3)
     }
     
     -- Handle creep spawning cycles
@@ -355,6 +390,12 @@ function Grid:updateBall()
     
     -- Check boundaries
     if self.ball.y <= TOP_BOUNDARY or self.ball.y >= BOTTOM_BOUNDARY then
+        if self.ball.bounces >= 2 then
+            -- Force landing on 3rd bounce (after 2 previous bounces)
+            self:handleBallLanding()
+            return
+        end
+        self.ball.bounces = self.ball.bounces + 1
         self.ball.vy = -self.ball.vy
     end
     
@@ -834,7 +875,7 @@ function Grid:findNearestValidCells(x, y, count)
     local candidates = {}
     
     for idx, cell in pairs(self.cells) do
-        if not cell.permanent and idx ~= SHOOTER_IDX then
+        if not cell.permanent then
             local pos = self.positions[idx]
             if pos then
                 local dx = x - pos.x
@@ -1134,7 +1175,7 @@ function Grid:findValidTierThreePlacement(centerX, centerY)
             local allValid = true
             
             -- Check if center is valid (not permanent boundary, not shooter, not tier3)
-            if self.cells[centerIdx].permanent or centerIdx == SHOOTER_IDX or 
+            if self.cells[centerIdx].permanent or 
                (self.cells[centerIdx].occupied and self.cells[centerIdx].tier == "tier3") then
                 allValid = false
             end
@@ -1142,7 +1183,7 @@ function Grid:findValidTierThreePlacement(centerX, centerY)
             -- Add first ring (6 neighbors) - allow stomping basic/tier1/tier2
             if allValid then
                 for _, neighborIdx in ipairs(neighbors) do
-                    if self.cells[neighborIdx] and not self.cells[neighborIdx].permanent and neighborIdx ~= SHOOTER_IDX and
+                    if self.cells[neighborIdx] and not self.cells[neighborIdx].permanent and
                        not (self.cells[neighborIdx].occupied and self.cells[neighborIdx].tier == "tier3") then
                         pattern[#pattern + 1] = neighborIdx
                     else
@@ -1171,7 +1212,7 @@ function Grid:findValidTierThreePlacement(centerX, centerY)
                         
                         -- Allow if not permanent, not shooter, not tier3
                         if not alreadyInPattern and self.cells[secondRingIdx] and 
-                           not self.cells[secondRingIdx].permanent and secondRingIdx ~= SHOOTER_IDX and
+                           not self.cells[secondRingIdx].permanent and
                            not (self.cells[secondRingIdx].occupied and self.cells[secondRingIdx].tier == "tier3") then
                             secondRingCells[#secondRingCells + 1] = secondRingIdx
                         end
@@ -1429,7 +1470,7 @@ function Grid:drawGrid()
     
     for idx, cell in pairs(self.cells) do
         local pos = self.positions[idx]
-        if pos and idx ~= SHOOTER_IDX then
+        if pos then
             if cell.permanent then
                 gfx.fillCircleAtPoint(pos.x, pos.y, 2)
             else
@@ -1493,7 +1534,7 @@ function Grid:drawBalls()
     -- Basic tier balls (only render non-tier1/tier2 occupied cells)
     for idx, cell in pairs(self.cells) do
         if cell.occupied and not cell.permanent and not cell.animating and 
-           cell.tier == "basic" and idx ~= SHOOTER_IDX then
+           cell.tier == "basic" then
             local pos = self.positions[idx]
             if pos then
                 self.bubbleSprites.basic[cell.ballType]:draw(pos.x - 10, pos.y - 10)
@@ -1530,13 +1571,13 @@ function Grid:drawBalls()
         end
         
         if shouldDraw then
-            local shooterPos = self.positions[SHOOTER_IDX]
-            self.bubbleSprites.basic[self.shooterBallType]:draw(shooterPos.x - 10, shooterPos.y - 10)
+            -- Aim line (render behind shooter ball)
+            local endX = self.shooterX - self.aimCos * AIM_LINE_LENGTH
+            local endY = self.shooterY - self.aimSin * AIM_LINE_LENGTH
+            gfx.drawLine(self.shooterX, self.shooterY, endX, endY)
             
-            -- Aim line (only show if shooter ball exists)
-            local endX = shooterPos.x - self.aimCos * AIM_LINE_LENGTH
-            local endY = shooterPos.y - self.aimSin * AIM_LINE_LENGTH
-            gfx.drawLine(shooterPos.x, shooterPos.y, endX, endY)
+            -- Shooter ball (renders on top of aim line)
+            self.bubbleSprites.basic[self.shooterBallType]:draw(self.shooterX - 10, self.shooterY - 10)
         end
     end
     

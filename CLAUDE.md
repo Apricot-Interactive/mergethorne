@@ -303,3 +303,4 @@ The current architecture is designed for easy expansion. See `todo.md` for detai
 - **Playdate integration** (sound, haptics, device testing)
 
 The codebase provides a solid foundation for these enhancements while maintaining the clean, efficient structure established during the refactor.
+- User always runs build process and tests (instruct user, don't try to compile)
