@@ -9,6 +9,8 @@
 -- Performance targets: 60fps stable, <400 lines total
 -- Design principle: Each function <20 lines, minimal nesting
 
+local MergeConstants = import("game/mergeConstants")
+
 local pd <const> = playdate
 local gfx <const> = pd.graphics
 
@@ -99,7 +101,9 @@ function Grid:createGrid()
             }
         end
     end
+    
 end
+
 
 -- Setup boundary cells (cutouts and walls)
 function Grid:setupBoundaries()
@@ -155,6 +159,8 @@ function Grid:setupGameState()
     -- Phase 2: Tier tracking systems
     self.tierOnePositions = {}  -- {idx -> {centerX, centerY, ballType, triangle}}
     self.tierTwoPositions = {}  -- {idx -> {centerX, centerY, sprite, pattern}}
+    self.tierThreePositions = {} -- {idx -> {centerX, centerY, sprite, pattern}}
+    self.magnetismDelayCounter = 0  -- 8-frame delay before checking magnetism
     
     -- Precompute aim direction
     self:updateAimDirection()
@@ -251,6 +257,15 @@ function Grid:update()
     end
     
     self:updateAnimations()
+    
+    -- Handle magnetism delay counter (check Tier 3 first, then Tier 2)
+    if self.magnetismDelayCounter > 0 then
+        self.magnetismDelayCounter = self.magnetismDelayCounter - 1
+        if self.magnetismDelayCounter == 0 then
+            self:checkMagneticTierThree()
+        end
+    end
+    
     self:updateBall()
 end
 
@@ -341,7 +356,7 @@ end
 
 -- Handle ball landing after collision
 function Grid:handleBallLanding()
-    local landingIdx = self:findNearestEmptyCell(self.ball.x, self.ball.y)
+    local landingIdx = self:findNearestValidCell(self.ball.x, self.ball.y)
     
     if landingIdx and self:isLegalPlacement(landingIdx) then
         -- Place ball successfully
@@ -370,28 +385,6 @@ function Grid:handleBallLanding()
     end
 end
 
--- Find nearest empty cell to given position
-function Grid:findNearestEmptyCell(x, y)
-    local minDist = math.huge
-    local nearestIdx = nil
-    
-    for idx, cell in pairs(self.cells) do
-        if not cell.occupied and not cell.permanent and idx ~= SHOOTER_IDX then
-            local pos = self.positions[idx]
-            if pos then
-                local dx = x - pos.x
-                local dy = y - pos.y
-                local dist = dx * dx + dy * dy
-                if dist < minDist then
-                    minDist = dist
-                    nearestIdx = idx
-                end
-            end
-        end
-    end
-    
-    return nearestIdx
-end
 
 -- Check if placement is legal (within 1 cell of collision)
 function Grid:isLegalPlacement(landingIdx)
@@ -502,7 +495,7 @@ end
 function Grid:updateAnimations()
     if not self.isAnimating then return end
     
-    local allComplete = true
+    local activeAnimations = {}
     
     for i, anim in ipairs(self.animations) do
         anim.frame = anim.frame + 1
@@ -519,14 +512,84 @@ function Grid:updateAnimations()
                 end
                 -- Phase 2: Create tier 1 bubble after merge
                 self:createTierOne(anim.centerX, anim.centerY, anim.ballType)
+                -- Don't keep this animation
             else
-                allComplete = false
+                activeAnimations[#activeAnimations + 1] = anim
+            end
+        elseif anim.type == "tier1_placement" then
+            if progress >= 1.0 then
+                -- Complete tier 1 placement - use the animation's end coordinates
+                self:placeTierOne(anim.triangle, anim.ballType, anim.endX, anim.endY)
+                -- Don't keep this animation
+            else
+                activeAnimations[#activeAnimations + 1] = anim
+            end
+        elseif anim.type == "tier2_magnetism" then
+            if progress >= 1.0 then
+                -- Complete magnetism - remove both tier 1s and create tier 2
+                self:clearTierOne(anim.tierOne1)
+                self:clearTierOne(anim.tierOne2)
+                self:placeTierTwo(anim.endX, anim.endY, anim.sprite)
+                -- Don't keep this animation
+            else
+                activeAnimations[#activeAnimations + 1] = anim
+            end
+        elseif anim.type == "tier2_snap" then
+            if progress >= 1.0 then
+                -- Complete grid snapping - mark all pattern cells as tier 2
+                for _, idx in ipairs(anim.pattern) do
+                    self.cells[idx].ballType = anim.sprite
+                    self.cells[idx].occupied = true
+                    self.cells[idx].tier = "tier2"
+                end
+                
+                -- Store at exact grid position
+                self.tierTwoPositions[anim.centerIdx] = {
+                    centerX = anim.endX,
+                    centerY = anim.endY,
+                    sprite = anim.sprite,
+                    pattern = anim.pattern
+                }
+                -- Don't keep this animation
+            else
+                activeAnimations[#activeAnimations + 1] = anim
+            end
+        elseif anim.type == "tier3_magnetism" then
+            if progress >= 1.0 then
+                -- Complete tier 3 magnetism - remove tier 1 and tier 2, create tier 3
+                self:clearTierOne(anim.tierOne)
+                self:clearTierTwo(anim.tierTwo)
+                self:placeTierThree(anim.endX, anim.endY, anim.sprite)
+                -- Don't keep this animation
+            else
+                activeAnimations[#activeAnimations + 1] = anim
+            end
+        elseif anim.type == "tier3_snap" then
+            if progress >= 1.0 then
+                -- Complete grid snapping - mark all pattern cells as tier 3
+                for _, idx in ipairs(anim.pattern) do
+                    self.cells[idx].ballType = anim.sprite
+                    self.cells[idx].occupied = true
+                    self.cells[idx].tier = "tier3"
+                end
+                
+                -- Store at exact grid position
+                self.tierThreePositions[anim.centerIdx] = {
+                    centerX = anim.endX,
+                    centerY = anim.endY,
+                    sprite = anim.sprite,
+                    pattern = anim.pattern
+                }
+                -- Don't keep this animation
+            else
+                activeAnimations[#activeAnimations + 1] = anim
             end
         end
     end
     
-    if allComplete then
-        self.animations = {}
+    self.animations = activeAnimations
+    
+    if #self.animations == 0 then
         self.isAnimating = false
     end
 end
@@ -535,63 +598,99 @@ end
 function Grid:createTierOne(centerX, centerY, ballType)
     local bestTriangle = self:findBestTriangleForTierOne(centerX, centerY)
     if bestTriangle then
-        self:placeTierOne(bestTriangle, ballType, centerX, centerY)
-        -- Check for magnetic combinations after placing tier 1
-        self:checkMagneticCombinations()
+        self:startTierOnePlacement(bestTriangle, ballType, centerX, centerY)
+    else
+        print("ERROR: No valid triangle found for tier 1 placement!")
     end
 end
 
--- Find best triangle of empty cells near merge center
+-- Start tier 1 placement animation
+function Grid:startTierOnePlacement(triangle, ballType, mergeX, mergeY)
+    local triangleCenter = self:getTriangleCenter(triangle)
+    
+    -- Use the same rounding as we do when storing the tier 1
+    local endX = math.floor(triangleCenter.x + 0.5)
+    local endY = math.floor(triangleCenter.y + 0.5)
+    
+    self.animations[#self.animations + 1] = {
+        type = "tier1_placement",
+        triangle = triangle,
+        ballType = ballType,
+        startX = mergeX,
+        startY = mergeY,
+        endX = endX,
+        endY = endY,
+        frame = 0
+    }
+    self.isAnimating = true
+end
+
+-- Find best triangle for tier 1 placement (expanded search approach)
 function Grid:findBestTriangleForTierOne(centerX, centerY)
-    local nearestIdx = self:findNearestEmptyCell(centerX, centerY)
-    if not nearestIdx then return nil end
+    -- Find multiple candidate cells near the merge center
+    local candidates = self:findNearestValidCells(centerX, centerY, 5)
+    if #candidates == 0 then return nil end
     
-    local triangles = self:getTriangleCombinations(nearestIdx)
-    local bestTriangle = nil
-    local minDist = math.huge
+    -- Collect all valid triangles from all candidates
+    local allValidTriangles = {}
     
-    for _, triangle in ipairs(triangles) do
-        local triangleCenter = self:getTriangleCenter(triangle)
-        local dx = centerX - triangleCenter.x
-        local dy = centerY - triangleCenter.y
-        local dist = dx * dx + dy * dy
-        if dist < minDist then
-            minDist = dist
-            bestTriangle = triangle
-        end
-    end
-    
-    return bestTriangle
-end
-
--- Get all valid triangle combinations around a center cell
-function Grid:getTriangleCombinations(centerIdx)
-    local neighbors = self:getNeighbors(centerIdx)
-    local triangles = {}
-    
-    -- Try all pairs of neighbors to form triangles with center
-    for i = 1, #neighbors do
-        for j = i + 1, #neighbors do
-            local triangle = {centerIdx, neighbors[i], neighbors[j]}
-            if self:isValidTriangleForTierOne(triangle) then
-                triangles[#triangles + 1] = triangle
+    for _, candidate in ipairs(candidates) do
+        local candidateIdx = candidate.idx
+        local candidatePos = candidate.pos
+        
+        -- Get neighbors for this candidate
+        local neighbors = self:getNeighbors(candidateIdx)
+        if #neighbors >= 6 then
+            -- Define all 6 possible pie slice triangles
+            local pieSlices = {
+                {angle = 0,   triangle = {candidateIdx, neighbors[2], neighbors[4]}}, -- 0° right
+                {angle = 60,  triangle = {candidateIdx, neighbors[1], neighbors[2]}}, -- 60° up-right  
+                {angle = 120, triangle = {candidateIdx, neighbors[3], neighbors[1]}}, -- 120° up-left
+                {angle = 180, triangle = {candidateIdx, neighbors[5], neighbors[3]}}, -- 180° left
+                {angle = 240, triangle = {candidateIdx, neighbors[6], neighbors[5]}}, -- 240° down-left
+                {angle = 300, triangle = {candidateIdx, neighbors[4], neighbors[6]}}  -- 300° down-right
+            }
+            
+            -- Test each pie slice for validity
+            for _, slice in ipairs(pieSlices) do
+                local isValid = true
+                for _, idx in ipairs(slice.triangle) do
+                    if not self.positions[idx] or self.cells[idx].permanent then
+                        isValid = false
+                        break
+                    end
+                end
+                
+                if isValid then
+                    -- Calculate triangle center and distance to merge center
+                    local triangleCenter = self:getTriangleCenter(slice.triangle)
+                    local dx = centerX - triangleCenter.x
+                    local dy = centerY - triangleCenter.y
+                    local dist = dx * dx + dy * dy
+                    
+                    allValidTriangles[#allValidTriangles + 1] = {
+                        triangle = slice.triangle,
+                        center = triangleCenter,
+                        dist = dist,
+                        candidateIdx = candidateIdx
+                    }
+                end
             end
         end
     end
     
-    return triangles
+    -- Choose triangle with center closest to merge center
+    local bestTriangle = nil
+    if #allValidTriangles > 0 then
+        table.sort(allValidTriangles, function(a, b) return a.dist < b.dist end)
+        bestTriangle = allValidTriangles[1].triangle
+    end
+    
+    -- Removed debug output for cleaner console
+    
+    return bestTriangle
 end
 
--- Check if triangle cells are available for tier 1 placement
-function Grid:isValidTriangleForTierOne(triangle)
-    for _, idx in ipairs(triangle) do
-        local cell = self.cells[idx]
-        if not cell or cell.occupied or cell.permanent or idx == SHOOTER_IDX then
-            return false
-        end
-    end
-    return true
-end
 
 -- Calculate center point of triangle
 function Grid:getTriangleCenter(triangle)
@@ -604,8 +703,46 @@ function Grid:getTriangleCenter(triangle)
     return {x = centerX / 3, y = centerY / 3}
 end
 
+-- Find nearest valid cell to given position (for ball placement)
+function Grid:findNearestValidCell(x, y)
+    local candidates = self:findNearestValidCells(x, y, 1)
+    return candidates[1] and candidates[1].idx or nil
+end
+
+-- Find multiple nearest valid cells to given position
+function Grid:findNearestValidCells(x, y, count)
+    local candidates = {}
+    
+    for idx, cell in pairs(self.cells) do
+        if not cell.permanent and idx ~= SHOOTER_IDX then
+            local pos = self.positions[idx]
+            if pos then
+                local dx = x - pos.x
+                local dy = y - pos.y
+                local dist = dx * dx + dy * dy
+                candidates[#candidates + 1] = {idx = idx, pos = pos, dist = dist}
+            end
+        end
+    end
+    
+    -- Sort by distance and return top 'count' candidates
+    table.sort(candidates, function(a, b) return a.dist < b.dist end)
+    
+    local result = {}
+    for i = 1, math.min(count, #candidates) do
+        result[i] = candidates[i]
+    end
+    
+    return result
+end
+
 -- Place tier 1 bubble in triangle formation
 function Grid:placeTierOne(triangle, ballType, centerX, centerY)
+    -- Clear any existing bubbles in triangle positions
+    for _, idx in ipairs(triangle) do
+        self:clearCell(idx)
+    end
+    
     -- Mark all triangle cells as tier 1
     for _, idx in ipairs(triangle) do
         self.cells[idx].ballType = ballType
@@ -613,7 +750,7 @@ function Grid:placeTierOne(triangle, ballType, centerX, centerY)
         self.cells[idx].tier = "tier1"
     end
     
-    -- Store rendering info for the first cell in triangle
+    -- Use the provided coordinates directly (already rounded from animation)
     local renderIdx = triangle[1]
     self.tierOnePositions[renderIdx] = {
         centerX = centerX,
@@ -621,6 +758,54 @@ function Grid:placeTierOne(triangle, ballType, centerX, centerY)
         ballType = ballType,
         triangle = triangle
     }
+    
+    -- Start 8-frame delay before checking magnetism
+    self.magnetismDelayCounter = 8
+end
+
+-- Clear a cell of any bubble (basic or tier)
+function Grid:clearCell(idx)
+    local cell = self.cells[idx]
+    if not cell then return end
+    
+    -- Clear basic bubble
+    if cell.tier == "basic" and cell.occupied then
+        cell.ballType = nil
+        cell.occupied = false
+        cell.tier = nil
+    end
+    
+    -- Clear tier 1 bubble
+    if cell.tier == "tier1" then
+        -- Find and remove from tierOnePositions
+        for tierIdx, tierData in pairs(self.tierOnePositions) do
+            for _, triangleIdx in ipairs(tierData.triangle) do
+                if triangleIdx == idx then
+                    self.tierOnePositions[tierIdx] = nil
+                    break
+                end
+            end
+        end
+        cell.ballType = nil
+        cell.occupied = false
+        cell.tier = nil
+    end
+    
+    -- Clear tier 2 bubble
+    if cell.tier == "tier2" then
+        -- Find and remove from tierTwoPositions
+        for tierIdx, tierData in pairs(self.tierTwoPositions) do
+            for _, patternIdx in ipairs(tierData.pattern) do
+                if patternIdx == idx then
+                    self.tierTwoPositions[tierIdx] = nil
+                    break
+                end
+            end
+        end
+        cell.ballType = nil
+        cell.occupied = false
+        cell.tier = nil
+    end
 end
 
 -- Phase 2: Check for magnetic tier 1 combinations
@@ -646,12 +831,95 @@ function Grid:checkMagneticCombinations()
             if t1.ballType ~= t2.ballType then
                 local distance = self:getMagneticDistance(t1.centerX, t1.centerY, t2.centerX, t2.centerY)
                 if distance <= 60 then -- Magnetic range (about 3 cells)
-                    self:createTierTwoCombination(t1, t2)
+                    self:startTierTwoMagnetism(t1, t2)
                     return -- Only one combination at a time
                 end
             end
         end
     end
+end
+
+-- Phase 3: Check for magnetic tier 3 combinations (Tier 1 + Tier 2)
+function Grid:checkMagneticTierThree()
+    if self.isAnimating then return end
+    
+    -- Find all tier 1 and tier 2 bubbles
+    local tierOnes = {}
+    local tierTwos = {}
+    
+    for idx, tierOneData in pairs(self.tierOnePositions) do
+        tierOnes[#tierOnes + 1] = {
+            idx = idx,
+            ballType = tierOneData.ballType,
+            centerX = tierOneData.centerX,
+            centerY = tierOneData.centerY,
+            triangle = tierOneData.triangle
+        }
+    end
+    
+    for idx, tierTwoData in pairs(self.tierTwoPositions) do
+        tierTwos[#tierTwos + 1] = {
+            idx = idx,
+            sprite = tierTwoData.sprite,
+            centerX = tierTwoData.centerX,
+            centerY = tierTwoData.centerY,
+            pattern = tierTwoData.pattern
+        }
+    end
+    
+    -- Check for valid Tier 3 combinations (Tier 2 + Tier 1)
+    for i = 1, #tierTwos do
+        for j = 1, #tierOnes do
+            local t2, t1 = tierTwos[i], tierOnes[j]
+            local tier3Sprite = MergeConstants.getTierThreeSprite(t2.sprite, t1.ballType)
+            
+            if tier3Sprite then
+                local distance = self:getMagneticDistance(t2.centerX, t2.centerY, t1.centerX, t1.centerY)
+                if distance <= 62 then -- Magnetic range for Tier 3 (42 + 20)
+                    self:startTierThreeMagnetism(t2, t1, tier3Sprite)
+                    return -- Only one combination at a time
+                end
+            end
+        end
+    end
+    
+    -- If no Tier 3 possible, check for normal Tier 2 combinations
+    self:checkMagneticCombinations()
+end
+
+-- Start tier 3 magnetism animation
+function Grid:startTierThreeMagnetism(tierTwo, tierOne, sprite)
+    local midpointX = (tierTwo.centerX + tierOne.centerX) / 2
+    local midpointY = (tierTwo.centerY + tierOne.centerY) / 2
+    
+    self.animations[#self.animations + 1] = {
+        type = "tier3_magnetism",
+        tierTwo = tierTwo,
+        tierOne = tierOne,
+        endX = midpointX,
+        endY = midpointY,
+        sprite = sprite,
+        frame = 0
+    }
+    self.isAnimating = true
+end
+
+-- Start tier 2 magnetism animation
+function Grid:startTierTwoMagnetism(tierOne1, tierOne2)
+    local midpointX = (tierOne1.centerX + tierOne2.centerX) / 2
+    local midpointY = (tierOne1.centerY + tierOne2.centerY) / 2
+    local sprite = self:getTierTwoSprite(tierOne1.ballType, tierOne2.ballType)
+    
+    self.animations[#self.animations + 1] = {
+        type = "tier2_magnetism",
+        tierOne1 = tierOne1,
+        tierOne2 = tierOne2,
+        endX = midpointX,
+        endY = midpointY,
+        sprite = sprite,
+        frame = 0
+    }
+    self.isAnimating = true
 end
 
 -- Calculate distance between two points
@@ -677,15 +945,7 @@ end
 
 -- Get tier 2 sprite index from ball type combination
 function Grid:getTierTwoSprite(type1, type2)
-    -- Based on original tier 2 combination mapping
-    local combinations = {
-        [1] = {[2] = 1, [3] = 2, [4] = 9, [5] = 7}, -- Fire combinations
-        [2] = {[1] = 1, [3] = 3, [4] = 10, [5] = 4}, -- Water combinations
-        [3] = {[1] = 2, [2] = 3, [4] = 6, [5] = 5},  -- Earth combinations
-        [4] = {[1] = 9, [2] = 10, [3] = 6, [5] = 8}, -- Lightning combinations
-        [5] = {[1] = 7, [2] = 4, [3] = 5, [4] = 8}   -- Wind combinations
-    }
-    return combinations[type1] and combinations[type1][type2] or 1
+    return MergeConstants.getTierTwoSprite(type1, type2) or 1
 end
 
 -- Clear tier 1 bubble and its triangle cells
@@ -698,34 +958,156 @@ function Grid:clearTierOne(tierOne)
     self.tierOnePositions[tierOne.idx] = nil
 end
 
--- Place tier 2 bubble (occupies 2-3-2 pattern)
-function Grid:placeTierTwo(centerX, centerY, sprite)
-    local centerIdx = self:findNearestEmptyCell(centerX, centerY)
-    if not centerIdx then return end
-    
-    -- 2-3-2 pattern around center
-    local pattern = {centerIdx}
-    local neighbors = self:getNeighbors(centerIdx)
-    for i = 1, math.min(6, #neighbors) do
-        pattern[#pattern + 1] = neighbors[i]
+-- Clear tier 2 bubble and its pattern cells
+function Grid:clearTierTwo(tierTwo)
+    for _, idx in ipairs(tierTwo.pattern) do
+        self.cells[idx].ballType = nil
+        self.cells[idx].occupied = false
+        self.cells[idx].tier = nil
     end
+    self.tierTwoPositions[tierTwo.idx] = nil
+end
+
+-- Find valid Tier 2 placement near given position
+function Grid:findValidTierTwoPlacement(centerX, centerY)
+    local candidates = self:findNearestValidCells(centerX, centerY, 5)
     
-    -- Mark pattern cells as tier 2
-    for _, idx in ipairs(pattern) do
-        if self.cells[idx] and not self.cells[idx].occupied then
-            self.cells[idx].ballType = sprite
-            self.cells[idx].occupied = true
-            self.cells[idx].tier = "tier2"
+    for _, candidate in ipairs(candidates) do
+        local centerIdx = candidate.idx
+        local neighbors = self:getNeighbors(centerIdx)
+        
+        -- Check if we have enough valid neighbors for full 7-cell pattern
+        if #neighbors >= 6 then
+            local validPattern = {centerIdx}
+            local allValid = true
+            
+            for _, neighborIdx in ipairs(neighbors) do
+                if self.cells[neighborIdx] and not self.cells[neighborIdx].permanent and not self.cells[neighborIdx].occupied then
+                    validPattern[#validPattern + 1] = neighborIdx
+                else
+                    allValid = false
+                    break
+                end
+            end
+            
+            if allValid and #validPattern >= 7 then
+                return centerIdx, validPattern
+            end
         end
     end
     
-    -- Store rendering info
-    self.tierTwoPositions[centerIdx] = {
-        centerX = centerX,
-        centerY = centerY,
+    return nil, nil
+end
+
+-- Find valid Tier 3 placement near given position (19-cell pattern)
+function Grid:findValidTierThreePlacement(centerX, centerY)
+    local candidates = self:findNearestValidCells(centerX, centerY, 5)
+    
+    for _, candidate in ipairs(candidates) do
+        local centerIdx = candidate.idx
+        local neighbors = self:getNeighbors(centerIdx)
+        
+        -- Need full 2-ring neighbor pattern for 3-4-5-4-3 formation
+        if #neighbors >= 6 then
+            local pattern = {centerIdx} -- Start with center
+            local allValid = true
+            
+            -- Add first ring (6 neighbors)
+            for _, neighborIdx in ipairs(neighbors) do
+                if self.cells[neighborIdx] and not self.cells[neighborIdx].permanent then
+                    pattern[#pattern + 1] = neighborIdx
+                else
+                    allValid = false
+                    break
+                end
+            end
+            
+            -- Add second ring (12 neighbors of neighbors)
+            if allValid then
+                for _, firstRingIdx in ipairs(neighbors) do
+                    local secondRing = self:getNeighbors(firstRingIdx)
+                    for _, secondRingIdx in ipairs(secondRing) do
+                        -- Avoid duplicates and ensure valid
+                        local isDuplicate = false
+                        for _, existing in ipairs(pattern) do
+                            if existing == secondRingIdx then
+                                isDuplicate = true
+                                break
+                            end
+                        end
+                        
+                        if not isDuplicate and self.cells[secondRingIdx] and not self.cells[secondRingIdx].permanent then
+                            pattern[#pattern + 1] = secondRingIdx
+                            if #pattern >= 19 then break end -- Limit to 19 cells
+                        end
+                    end
+                    if #pattern >= 19 then break end
+                end
+                
+                if #pattern >= 19 then
+                    return centerIdx, pattern
+                end
+            end
+        end
+    end
+    
+    return nil, nil
+end
+
+-- Place tier 2 bubble with grid snapping animation
+function Grid:placeTierTwo(centerX, centerY, sprite)
+    -- Find valid position for full 7-cell pattern
+    local centerIdx, pattern = self:findValidTierTwoPlacement(centerX, centerY)
+    if not centerIdx then 
+        print("ERROR: No valid Tier 2 placement found!")
+        return 
+    end
+    
+    local gridPos = self.positions[centerIdx]
+    
+    -- Start grid snapping animation (like Tier 1 does)
+    self.animations[#self.animations + 1] = {
+        type = "tier2_snap",
+        startX = centerX,           -- midpoint from magnetism
+        startY = centerY,
+        endX = gridPos.x,          -- target grid center
+        endY = gridPos.y,
+        centerIdx = centerIdx,
+        pattern = pattern,          -- store the validated pattern
         sprite = sprite,
-        pattern = pattern
+        frame = 0
     }
+    self.isAnimating = true
+    
+    print("TIER 2 SNAP: From (" .. centerX .. "," .. centerY .. ") to valid grid (" .. gridPos.x .. "," .. gridPos.y .. ") with " .. #pattern .. " cells")
+end
+
+-- Place tier 3 bubble with grid snapping animation  
+function Grid:placeTierThree(centerX, centerY, sprite)
+    -- Find valid position for full 19-cell pattern
+    local centerIdx, pattern = self:findValidTierThreePlacement(centerX, centerY)
+    if not centerIdx then 
+        print("ERROR: No valid Tier 3 placement found!")
+        return 
+    end
+    
+    local gridPos = self.positions[centerIdx]
+    
+    -- Start grid snapping animation (like Tier 2 does)
+    self.animations[#self.animations + 1] = {
+        type = "tier3_snap",
+        startX = centerX,           -- midpoint from magnetism
+        startY = centerY,
+        endX = gridPos.x,          -- target grid center
+        endY = gridPos.y,
+        centerIdx = centerIdx,
+        pattern = pattern,          -- store the validated 19-cell pattern
+        sprite = sprite,
+        frame = 0
+    }
+    self.isAnimating = true
+    
+    print("TIER 3 SNAP: From (" .. centerX .. "," .. centerY .. ") to valid grid (" .. gridPos.x .. "," .. gridPos.y .. ") with " .. #pattern .. " cells")
 end
 
 -- Start game over sequence (3 flashes then game over)
@@ -828,6 +1210,7 @@ end
 
 -- Draw placed balls
 function Grid:drawBalls()
+    
     -- Basic tier balls (only render non-tier1/tier2 occupied cells)
     for idx, cell in pairs(self.cells) do
         if cell.occupied and not cell.permanent and not cell.animating and 
@@ -837,18 +1220,27 @@ function Grid:drawBalls()
                 self.bubbleSprites.basic[cell.ballType]:draw(pos.x - 10, pos.y - 10)
             end
         end
+        
     end
     
-    -- Tier 1 bubbles (render at stored center positions)
+    -- Tier 1 bubbles (render at stored center positions with CORRECT centering)
     for idx, tierOneData in pairs(self.tierOnePositions) do
+        -- Draw the tier 1 bubble with correct 36x36 sprite centering
         self.bubbleSprites.tier1[tierOneData.ballType]:draw(
-            tierOneData.centerX - 10, tierOneData.centerY - 10)
+            tierOneData.centerX - 18, tierOneData.centerY - 18)
+            
     end
     
     -- Tier 2 bubbles (render at stored center positions)
     for idx, tierTwoData in pairs(self.tierTwoPositions) do
         self.bubbleSprites.tier2[tierTwoData.sprite]:draw(
-            tierTwoData.centerX - 10, tierTwoData.centerY - 10)
+            tierTwoData.centerX - 26, tierTwoData.centerY - 26)
+    end
+    
+    -- Tier 3 bubbles (render at stored center positions)
+    for idx, tierThreeData in pairs(self.tierThreePositions) do
+        self.bubbleSprites.tier3[tierThreeData.sprite]:draw(
+            tierThreeData.centerX - 42, tierThreeData.centerY - 42)
     end
     
     -- Shooter ball (with flashing for game over)
@@ -888,6 +1280,28 @@ function Grid:drawAnimations()
                 local currentY = pos.y + (anim.centerY - pos.y) * progress
                 self.bubbleSprites.basic[anim.ballType]:draw(currentX - 10, currentY - 10)
             end
+        elseif anim.type == "tier1_placement" then
+            local progress = math.min(anim.frame / MERGE_ANIMATION_FRAMES, 1.0)
+            
+            -- Draw tier 1 bubble moving from merge center to triangle center
+            local currentX = anim.startX + (anim.endX - anim.startX) * progress
+            local currentY = anim.startY + (anim.endY - anim.startY) * progress
+            -- Debug disabled for minimal test case
+            self.bubbleSprites.tier1[anim.ballType]:draw(currentX - 18, currentY - 18)
+        elseif anim.type == "tier2_snap" then
+            local progress = math.min(anim.frame / MERGE_ANIMATION_FRAMES, 1.0)
+            
+            -- Draw tier 2 bubble moving from midpoint to grid center
+            local currentX = anim.startX + (anim.endX - anim.startX) * progress
+            local currentY = anim.startY + (anim.endY - anim.startY) * progress
+            self.bubbleSprites.tier2[anim.sprite]:draw(currentX - 26, currentY - 26)
+        elseif anim.type == "tier3_snap" then
+            local progress = math.min(anim.frame / MERGE_ANIMATION_FRAMES, 1.0)
+            
+            -- Draw tier 3 bubble moving from midpoint to grid center
+            local currentX = anim.startX + (anim.endX - anim.startX) * progress
+            local currentY = anim.startY + (anim.endY - anim.startY) * progress
+            self.bubbleSprites.tier3[anim.sprite]:draw(currentX - 42, currentY - 42)
         end
     end
 end
