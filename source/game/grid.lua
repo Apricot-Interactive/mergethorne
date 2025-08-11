@@ -19,8 +19,8 @@ local gfx <const> = pd.graphics
 
 -- Core constants
 local BALL_SPEED <const> = 9
-local COLLISION_RADIUS <const> = 20
-local FLYING_BALL_RADIUS <const> = 18  -- 2px smaller for tighter gaps
+local COLLISION_RADIUS <const> = 18  -- 2px smaller for easier attachment
+local FLYING_BALL_RADIUS <const> = 15  -- 5px smaller for easier passage
 local AIM_LINE_LENGTH <const> = 50
 -- Shooter system constants - now free-floating on vertical line
 local SHOOTER_X <const> = 320  -- Vertical line bisecting even row cell 16 midpoints
@@ -58,7 +58,7 @@ local TROOP_MOVE_SPEED <const> = 2
 local TROOP_SIZE_BASIC <const> = 3   -- 4px sprite with 1px transparent buffer
 local TROOP_SIZE_TIER1 <const> = 4   -- 5px sprite with 1px transparent buffer  
 local TROOP_SIZE_TIER2 <const> = 8   -- 9px sprite with 1px transparent buffer
-local TROOP_SIZE_TIER3 <const> = 8   -- 9px sprite with 1px transparent buffer
+local TROOP_SIZE_TIER3 <const> = 16  -- 32px sprite with 1px transparent buffer
 local TROOP_MARCH_SPEED <const> = 2
 
 local Grid = {}
@@ -138,6 +138,7 @@ function Grid:init()
     self.bubbleSprites = loadBubbleSprites()
     self:createGrid()
     self:setupBoundaries()
+    self:initializeStartingGrid()
     self:setupGameState()
 end
 
@@ -167,7 +168,6 @@ function Grid:createGrid()
             }
         end
     end
-    
 end
 
 
@@ -203,6 +203,73 @@ function Grid:setupBoundaries()
     end
     
     -- Cell 13,16 (former shooter position) is now a legal playable space
+end
+
+-- Initialize starting grid with pre-placed bubbles
+function Grid:initializeStartingGrid()
+    -- Randomly assign bubble types to letters A, B, C, D, E (types 1-5)
+    local letterTypes = {}
+    local availableTypes = {1, 2, 3, 4, 5}
+    
+    -- Shuffle and assign types to letters
+    for i = #availableTypes, 2, -1 do
+        local j = math.random(i)
+        availableTypes[i], availableTypes[j] = availableTypes[j], availableTypes[i]
+    end
+    
+    letterTypes.A = availableTypes[1]
+    letterTypes.B = availableTypes[2]
+    letterTypes.C = availableTypes[3]
+    letterTypes.D = availableTypes[4]
+    letterTypes.E = availableTypes[5]
+    
+    -- Define pre-placed cell positions with their letter assignments
+    local prePlacedCells = {
+        -- A cells: 1,1 1,2 2,1 2,2
+        {{1,1}, "A"}, {{1,2}, "A"}, {{2,1}, "A"}, {{2,2}, "A"},
+        -- B cells: 3,1 3,2 3,3 4,1 4,2  
+        {{3,1}, "B"}, {{3,2}, "B"}, {{3,3}, "B"}, {{4,1}, "B"}, {{4,2}, "B"},
+        -- E cells: 13,1 13,2 12,1 12,2
+        {{13,1}, "E"}, {{13,2}, "E"}, {{12,1}, "E"}, {{12,2}, "E"},
+        -- D cells: 11,1 11,2 11,3 10,1 10,2
+        {{11,1}, "D"}, {{11,2}, "D"}, {{11,3}, "D"}, {{10,1}, "D"}, {{10,2}, "D"},
+        -- E cells: 4,3 5,3 5,4 6,3
+        {{4,3}, "E"}, {{5,3}, "E"}, {{5,4}, "E"}, {{6,3}, "E"},
+        -- A cells: 10,3 9,3 9,4 8,3
+        {{10,3}, "A"}, {{9,3}, "A"}, {{9,4}, "A"}, {{8,3}, "A"},
+        -- C cells: 6,4 7,4 7,5 8,4
+        {{6,4}, "C"}, {{7,4}, "C"}, {{7,5}, "C"}, {{8,4}, "C"},
+        -- B cells: 6,5 7,6 8,5
+        {{6,5}, "B"}, {{7,6}, "B"}, {{8,5}, "B"},
+        -- D cells: 6,6 7,7 8,6
+        {{6,6}, "D"}, {{7,7}, "D"}, {{8,6}, "D"},
+        -- C cells: 6,7 7,8 7,9 8,7
+        {{6,7}, "C"}, {{7,8}, "C"}, {{7,9}, "C"}, {{8,7}, "C"},
+        -- A cells: 6,8 5,8 5,9 4,8
+        {{6,8}, "A"}, {{5,8}, "A"}, {{5,9}, "A"}, {{4,8}, "A"},
+        -- E cells: 8,8 9,8 9,9 10,8
+        {{8,8}, "E"}, {{9,8}, "E"}, {{9,9}, "E"}, {{10,8}, "E"},
+        -- B cells: 6,9 7,10 8,9
+        {{6,9}, "B"}, {{7,10}, "B"}, {{8,9}, "B"},
+        -- D cells: 6,10 7,11 8,10
+        {{6,10}, "D"}, {{7,11}, "D"}, {{8,10}, "D"}
+    }
+    
+    -- Place all pre-defined cells
+    for _, cellData in ipairs(prePlacedCells) do
+        local pos = cellData[1]
+        local letter = cellData[2]
+        local row, col = pos[1], pos[2]
+        
+        if self:isValidGridPosition(row, col) then
+            local idx = (row - 1) * 20 + col
+            if self.cells[idx] and not self.cells[idx].permanent then
+                self.cells[idx].ballType = letterTypes[letter]
+                self.cells[idx].occupied = true
+                self.cells[idx].tier = "basic"
+            end
+        end
+    end
 end
 
 -- Initialize game state variables
@@ -241,40 +308,21 @@ function Grid:setupGameState()
     self.rallyPointOccupied = {}  -- Track positions around rally point
     self.troopMarchActive = false  -- Track when troops are in march mode
     
+    -- Battle and popup system
+    self.battleState = "normal"  -- "normal", "waiting_for_merges", "show_popup", "battle"
+    self.popup = {
+        active = false,
+        frame = 0,
+        text = "",
+        width = 180,
+        height = 50
+    }
+    
     -- Precompute aim direction
     self:updateAimDirection()
     
-    -- Add starting balls
-    self:setupStartingBalls()
 end
 
--- Add initial ball layout
-function Grid:setupStartingBalls()
-    local startingBalls = {
-        -- Basic A (type 1)
-        {1, 1, 1}, {1, 2, 1}, {2, 1, 1}, {2, 2, 1},
-        {6, 3, 1}, {7, 4, 1}, {8, 3, 1},
-        {12, 1, 1}, {12, 2, 1}, {13, 1, 1}, {13, 2, 1},
-        -- Basic B (type 2)
-        {3, 1, 2}, {3, 2, 2}, {4, 1, 2},
-        -- Basic C (type 3)
-        {4, 2, 3}, {5, 3, 3},
-        -- Basic D (type 4)
-        {9, 3, 4}, {10, 2, 4},
-        -- Basic E (type 5)
-        {10, 1, 5}, {11, 1, 5}, {11, 2, 5}
-    }
-    
-    for _, ball in ipairs(startingBalls) do
-        local row, col, ballType = ball[1], ball[2], ball[3]
-        if self:isValidGridPosition(row, col) then
-            local idx = (row - 1) * 20 + col
-            self.cells[idx].ballType = ballType
-            self.cells[idx].occupied = true
-            self.cells[idx].tier = "basic"
-        end
-    end
-end
 
 -- Validate grid position bounds
 function Grid:isValidGridPosition(row, col)
@@ -296,6 +344,11 @@ function Grid:handleInput()
         if pd.buttonJustPressed(pd.kButtonA) then
             self:init() -- Restart game
         end
+        return
+    end
+    
+    -- Block input during popup
+    if self.popup.active then
         return
     end
     
@@ -368,6 +421,7 @@ function Grid:update()
     self:updateAnimations()
     self:updateCreeps()
     self:updateTroops()
+    self:updateBattlePopup()
     
     -- Handle magnetism delay counter (check Tier 3 first, then Tier 2)
     if self.magnetismDelayCounter > 0 then
@@ -453,7 +507,7 @@ function Grid:checkBallCollision()
         local dx = self.ball.x - tierOneData.centerX
         local dy = self.ball.y - tierOneData.centerY
         local distSq = dx * dx + dy * dy
-        local tier1Radius = 27 -- 36/2 + 9 for flying ball radius
+        local tier1Radius = 25 -- 36/2 + 7 for flying ball radius (2px smaller)
         if distSq <= (tier1Radius * tier1Radius) then
             return true
         end
@@ -464,7 +518,7 @@ function Grid:checkBallCollision()
         local dx = self.ball.x - tierTwoData.centerX
         local dy = self.ball.y - tierTwoData.centerY
         local distSq = dx * dx + dy * dy
-        local tier2Radius = 35 -- 52/2 + 9 for flying ball radius
+        local tier2Radius = 33 -- 52/2 + 7 for flying ball radius (2px smaller)
         if distSq <= (tier2Radius * tier2Radius) then
             return true
         end
@@ -475,7 +529,7 @@ function Grid:checkBallCollision()
         local dx = self.ball.x - tierThreeData.centerX
         local dy = self.ball.y - tierThreeData.centerY
         local distSq = dx * dx + dy * dy
-        local tier3Radius = 51 -- 84/2 + 9 for flying ball radius
+        local tier3Radius = 49 -- 84/2 + 7 for flying ball radius (2px smaller)
         if distSq <= (tier3Radius * tier3Radius) then
             return true
         end
@@ -489,7 +543,7 @@ function Grid:handleBallLanding()
     local landingIdx = self:findNearestValidCell(self.ball.x, self.ball.y)
     
     if landingIdx and self:isLegalPlacement(landingIdx) then
-        -- Place ball successfully
+        -- Place ball (isLegalPlacement ensures cell is unoccupied)
         self.cells[landingIdx].ballType = self.ball.ballType
         self.cells[landingIdx].occupied = true
         self.cells[landingIdx].tier = "basic"  -- Phase 2: New balls are basic tier
@@ -505,9 +559,49 @@ function Grid:handleBallLanding()
         -- Handle troop spawning and shot counting (happens on every shot)
         self:handleTroopShotCounting()
         self:spawnTroopsForShot()
+        
+        -- Check if we should start battle popup immediately if no animations are running
+        if self.battleState == "waiting_for_merges" and not self.isAnimating then
+            self:startBattlePopup()
+        end
     else
-        -- Failed placement - trigger game over sequence
-        self:startGameOverSequence()
+        -- Try nearby cells for legal placement (no displacement)
+        local candidates = self:findNearestValidCells(self.ball.x, self.ball.y, 10)
+        local placed = false
+        
+        for _, candidate in ipairs(candidates) do
+            if self:isLegalPlacement(candidate.idx) then
+                -- Place ball in unoccupied cell (no ripple displacement)
+                self.cells[candidate.idx].ballType = self.ball.ballType
+                self.cells[candidate.idx].occupied = true
+                self.cells[candidate.idx].tier = "basic"
+                self.ball = nil
+                
+                -- Advance to next ball
+                self.shooterBallType = self.onDeckBallType
+                self.onDeckBallType = math.random(1, 5)
+                
+                -- Check for merges
+                self:checkForMerges(candidate.idx)
+                
+                -- Handle troop spawning
+                self:handleTroopShotCounting()
+                self:spawnTroopsForShot()
+                
+                -- Check if we should start battle popup immediately if no animations are running
+                if self.battleState == "waiting_for_merges" and not self.isAnimating then
+                    self:startBattlePopup()
+                end
+                
+                placed = true
+                break
+            end
+        end
+        
+        -- Last resort: clear ball if no valid placement found
+        if not placed then
+            self:startGameOverSequence()
+        end
     end
 end
 
@@ -521,7 +615,9 @@ function Grid:isLegalPlacement(landingIdx)
     local dy = self.ball.y - pos.y
     local dist = math.sqrt(dx * dx + dy * dy)
     
-    return dist <= COLLISION_RADIUS
+    -- Must be within collision distance AND cell must be unoccupied
+    local cell = self.cells[landingIdx]
+    return dist <= COLLISION_RADIUS and cell and not cell.occupied and not cell.permanent
 end
 
 -- Check for merges starting from placed ball
@@ -665,6 +761,9 @@ function Grid:updateAnimations()
             end
         elseif anim.type == "tier2_snap" then
             if progress >= 1.0 then
+                -- Use ripple displacement to make space for tier 2 pattern
+                self:rippleDisplace(anim.pattern, 3)
+                
                 -- Complete grid snapping - mark all pattern cells as tier 2
                 for _, idx in ipairs(anim.pattern) do
                     self.cells[idx].ballType = anim.sprite
@@ -700,23 +799,8 @@ function Grid:updateAnimations()
             end
         elseif anim.type == "tier3_snap" then
             if progress >= 1.0 then
-                -- Clear any stomped tier bubbles from tracking tables before placing tier 3
-                for _, idx in ipairs(anim.pattern) do
-                    -- Remove from tier 1 positions if stomped
-                    if self.tierOnePositions[idx] then
-                        self.tierOnePositions[idx] = nil
-                    end
-                    
-                    -- Remove from tier 2 positions if stomped (check all patterns)
-                    for tierIdx, tierData in pairs(self.tierTwoPositions) do
-                        for _, patternIdx in ipairs(tierData.pattern) do
-                            if patternIdx == idx then
-                                self.tierTwoPositions[tierIdx] = nil
-                                break
-                            end
-                        end
-                    end
-                end
+                -- Use ripple displacement to make space for tier 3 pattern
+                self:rippleDisplace(anim.pattern, 4)
                 
                 -- Complete grid snapping - mark all pattern cells as tier 3
                 for _, idx in ipairs(anim.pattern) do
@@ -725,21 +809,69 @@ function Grid:updateAnimations()
                     self.cells[idx].tier = "tier3"
                 end
                 
-                -- Store at exact grid position
-                self.tierThreePositions[anim.centerIdx] = {
+                -- Start tier3_flash animation instead of immediate troop spawn
+                -- Don't add to tierThreePositions yet - wait for flash to complete
+                activeAnimations[#activeAnimations + 1] = {
+                    type = "tier3_flash",
+                    frame = 0,
                     centerX = anim.endX,
                     centerY = anim.endY,
                     sprite = anim.sprite,
-                    pattern = anim.pattern
+                    centerIdx = anim.centerIdx,
+                    flashState = "hold", -- hold, flash1, off1, flash2, off2
+                    holdFrames = 0,
+                    pattern = anim.pattern -- Store pattern for later
                 }
-                
-                -- Spawn troop from newly created tier 3
-                local rallyPos = self:getRandomRallyPoint()
-                self:spawnTroop(anim.endX, anim.endY, "tier3", TROOP_SIZE_TIER3, rallyPos)
                 
                 -- Don't keep this animation
             else
                 activeAnimations[#activeAnimations + 1] = anim
+            end
+        elseif anim.type == "tier3_flash" then
+            anim.frame = anim.frame + 1
+            
+            if anim.flashState == "hold" then
+                anim.holdFrames = anim.holdFrames + 1
+                if anim.holdFrames >= 8 then
+                    anim.flashState = "flash1"
+                    anim.frame = 0
+                end
+                activeAnimations[#activeAnimations + 1] = anim
+            elseif anim.flashState == "flash1" then
+                if anim.frame >= 4 then
+                    anim.flashState = "off1"
+                    anim.frame = 0
+                end
+                activeAnimations[#activeAnimations + 1] = anim
+            elseif anim.flashState == "off1" then
+                if anim.frame >= 4 then
+                    anim.flashState = "flash2"
+                    anim.frame = 0
+                end
+                activeAnimations[#activeAnimations + 1] = anim
+            elseif anim.flashState == "flash2" then
+                if anim.frame >= 4 then
+                    anim.flashState = "off2"
+                    anim.frame = 0
+                end
+                activeAnimations[#activeAnimations + 1] = anim
+            elseif anim.flashState == "off2" then
+                if anim.frame >= 4 then
+                    -- Flash animation complete - now add to tierThreePositions and spawn troop
+                    self.tierThreePositions[anim.centerIdx] = {
+                        centerX = anim.centerX,
+                        centerY = anim.centerY,
+                        sprite = anim.sprite,
+                        pattern = anim.pattern
+                    }
+                    
+                    local rallyPos = {x = 7 * 20 + 10, y = 3 * 17.32 + 10} -- Rally point 7,3
+                    self:spawnTroop(anim.centerX, anim.centerY, "tier3", TROOP_SIZE_TIER3, rallyPos)
+                    
+                    -- Don't keep this animation
+                else
+                    activeAnimations[#activeAnimations + 1] = anim
+                end
             end
         end
     end
@@ -748,6 +880,11 @@ function Grid:updateAnimations()
     
     if #self.animations == 0 then
         self.isAnimating = false
+        
+        -- Check if we should transition from waiting_for_merges to show_popup
+        if self.battleState == "waiting_for_merges" then
+            self:startBattlePopup()
+        end
     end
 end
 
@@ -897,12 +1034,280 @@ function Grid:findNearestValidCells(x, y, count)
     return result
 end
 
+-- Ripple displacement: Push existing bubbles away to make space for new placement
+function Grid:rippleDisplace(targetPositions, maxRippleRadius)
+    if not targetPositions or #targetPositions == 0 then return true end
+    
+    -- Collect all bubbles that need to be displaced (including whole tier bubbles)
+    local displacedBubbles = {}
+    local processedTierBubbles = {}  -- Track which tier bubbles we've already processed
+    
+    for _, idx in ipairs(targetPositions) do
+        local cell = self.cells[idx]
+        if cell and cell.occupied and not cell.permanent then
+            
+            -- Check if this cell is part of a tier bubble pattern
+            if cell.tier == "tier1" then
+                -- Find the tier 1 bubble this cell belongs to
+                for tierIdx, tierData in pairs(self.tierOnePositions) do
+                    if not processedTierBubbles[tierIdx] and tierData.triangle then
+                        for _, triangleIdx in ipairs(tierData.triangle) do
+                            if triangleIdx == idx then
+                                -- Displace entire tier 1 bubble
+                                displacedBubbles[#displacedBubbles + 1] = {
+                                    type = "tier1",
+                                    tierIdx = tierIdx,
+                                    tierData = tierData,
+                                    originalPos = {x = tierData.centerX, y = tierData.centerY}
+                                }
+                                -- Clear all triangle cells
+                                for _, clearIdx in ipairs(tierData.triangle) do
+                                    self.cells[clearIdx].occupied = false
+                                    self.cells[clearIdx].ballType = nil
+                                    self.cells[clearIdx].tier = nil
+                                end
+                                self.tierOnePositions[tierIdx] = nil
+                                processedTierBubbles[tierIdx] = true
+                                break
+                            end
+                        end
+                    end
+                end
+                
+            elseif cell.tier == "tier2" then
+                -- Find the tier 2 bubble this cell belongs to
+                for tierIdx, tierData in pairs(self.tierTwoPositions) do
+                    if not processedTierBubbles[tierIdx] and tierData.pattern then
+                        for _, patternIdx in ipairs(tierData.pattern) do
+                            if patternIdx == idx then
+                                -- Displace entire tier 2 bubble
+                                displacedBubbles[#displacedBubbles + 1] = {
+                                    type = "tier2", 
+                                    tierIdx = tierIdx,
+                                    tierData = tierData,
+                                    originalPos = {x = tierData.centerX, y = tierData.centerY}
+                                }
+                                -- Clear all pattern cells
+                                for _, clearIdx in ipairs(tierData.pattern) do
+                                    self.cells[clearIdx].occupied = false
+                                    self.cells[clearIdx].ballType = nil
+                                    self.cells[clearIdx].tier = nil
+                                end
+                                self.tierTwoPositions[tierIdx] = nil
+                                processedTierBubbles[tierIdx] = true
+                                break
+                            end
+                        end
+                    end
+                end
+                
+            elseif cell.tier == "tier3" then
+                -- Find the tier 3 bubble this cell belongs to
+                for tierIdx, tierData in pairs(self.tierThreePositions) do
+                    if not processedTierBubbles[tierIdx] and tierData.pattern then
+                        for _, patternIdx in ipairs(tierData.pattern) do
+                            if patternIdx == idx then
+                                -- Displace entire tier 3 bubble
+                                displacedBubbles[#displacedBubbles + 1] = {
+                                    type = "tier3",
+                                    tierIdx = tierIdx, 
+                                    tierData = tierData,
+                                    originalPos = {x = tierData.centerX, y = tierData.centerY}
+                                }
+                                -- Clear all pattern cells
+                                for _, clearIdx in ipairs(tierData.pattern) do
+                                    self.cells[clearIdx].occupied = false
+                                    self.cells[clearIdx].ballType = nil
+                                    self.cells[clearIdx].tier = nil
+                                end
+                                self.tierThreePositions[tierIdx] = nil
+                                processedTierBubbles[tierIdx] = true
+                                break
+                            end
+                        end
+                    end
+                end
+                
+            else
+                -- Regular basic bubble displacement
+                displacedBubbles[#displacedBubbles + 1] = {
+                    type = "basic",
+                    idx = idx,
+                    ballType = cell.ballType,
+                    tier = cell.tier,
+                    originalPos = self.positions[idx]
+                }
+                -- Temporarily clear the cell
+                cell.occupied = false
+                cell.ballType = nil
+                cell.tier = nil
+            end
+        end
+    end
+    
+    -- Find new homes for displaced bubbles using expanding search
+    local maxRadius = maxRippleRadius or 4
+    for _, bubble in ipairs(displacedBubbles) do
+        local foundHome = false
+        
+        -- Search outward in expanding rings from original position
+        for radius = 1, maxRadius do
+            if foundHome then break end
+            
+            local candidates = self:findNearestValidCells(bubble.originalPos.x, bubble.originalPos.y, radius * 6)
+            for _, candidate in ipairs(candidates) do
+                if bubble.type == "basic" then
+                    -- Simple basic bubble placement
+                    local candidateCell = self.cells[candidate.idx]
+                    if candidateCell and not candidateCell.occupied and not candidateCell.permanent then
+                        candidateCell.ballType = bubble.ballType
+                        candidateCell.occupied = true
+                        candidateCell.tier = bubble.tier
+                        foundHome = true
+                        break
+                    end
+                    
+                elseif bubble.type == "tier1" then
+                    -- Try to place tier 1 triangle near this candidate with flexible placement
+                    local newTriangle = self:findFlexibleTriangleForTierOne(candidate.pos.x, candidate.pos.y)
+                    if newTriangle then
+                        -- Clear any existing bubbles in the new triangle (recursive ripple if needed)
+                        for _, idx in ipairs(newTriangle) do
+                            if self.cells[idx].occupied and not self.cells[idx].permanent then
+                                self:rippleDisplace({idx}, 2) -- Smaller ripple to avoid infinite recursion
+                            end
+                        end
+                        
+                        -- Place the tier 1 bubble in new triangle formation
+                        for _, idx in ipairs(newTriangle) do
+                            self.cells[idx].ballType = bubble.tierData.ballType
+                            self.cells[idx].occupied = true
+                            self.cells[idx].tier = "tier1"
+                        end
+                        
+                        -- Update tracking with new triangle
+                        local newCenter = self:getTriangleCenter(newTriangle)
+                        self.tierOnePositions[newTriangle[1]] = {
+                            centerX = newCenter.x,
+                            centerY = newCenter.y,
+                            ballType = bubble.tierData.ballType,
+                            triangle = newTriangle
+                        }
+                        foundHome = true
+                        break
+                    end
+                    
+                elseif bubble.type == "tier2" then
+                    -- Try to place tier 2 pattern with flexible placement allowing basic bubble displacement
+                    local centerIdx, newPattern = self:findFlexibleTierTwoPlacement(candidate.pos.x, candidate.pos.y)
+                    if centerIdx and newPattern then
+                        -- Clear any basic bubbles in the new pattern (avoid tier bubble conflicts)
+                        for _, idx in ipairs(newPattern) do
+                            if self.cells[idx].occupied and self.cells[idx].tier == "basic" then
+                                self.cells[idx].occupied = false
+                                self.cells[idx].ballType = nil
+                                self.cells[idx].tier = nil
+                            end
+                        end
+                        
+                        -- Place the tier 2 bubble in new pattern
+                        for _, idx in ipairs(newPattern) do
+                            self.cells[idx].ballType = bubble.tierData.sprite
+                            self.cells[idx].occupied = true
+                            self.cells[idx].tier = "tier2"
+                        end
+                        
+                        -- Update tracking with new pattern
+                        local gridPos = self.positions[centerIdx]
+                        self.tierTwoPositions[centerIdx] = {
+                            centerX = gridPos.x,
+                            centerY = gridPos.y,
+                            sprite = bubble.tierData.sprite,
+                            pattern = newPattern
+                        }
+                        foundHome = true
+                        break
+                    end
+                    
+                elseif bubble.type == "tier3" then
+                    -- Try to place tier 3 pattern with flexible placement allowing basic bubble displacement
+                    local centerIdx, newPattern = self:findFlexibleTierThreePlacement(candidate.pos.x, candidate.pos.y)
+                    if centerIdx and newPattern then
+                        -- Clear any basic bubbles in the new pattern (avoid tier bubble conflicts)
+                        for _, idx in ipairs(newPattern) do
+                            if self.cells[idx].occupied and self.cells[idx].tier == "basic" then
+                                self.cells[idx].occupied = false
+                                self.cells[idx].ballType = nil
+                                self.cells[idx].tier = nil
+                            end
+                        end
+                        
+                        -- Place the tier 3 bubble in new pattern
+                        for _, idx in ipairs(newPattern) do
+                            self.cells[idx].ballType = bubble.tierData.sprite
+                            self.cells[idx].occupied = true
+                            self.cells[idx].tier = "tier3"
+                        end
+                        
+                        -- Update tracking with new pattern
+                        local gridPos = self.positions[centerIdx]
+                        self.tierThreePositions[centerIdx] = {
+                            centerX = gridPos.x,
+                            centerY = gridPos.y,
+                            sprite = bubble.tierData.sprite,
+                            pattern = newPattern
+                        }
+                        foundHome = true
+                        break
+                    end
+                end
+            end
+        end
+        
+        -- If no home found, restore bubble to original position (prevent deletion)
+        if not foundHome then
+            if bubble.type == "basic" then
+                local originalCell = self.cells[bubble.idx]
+                if originalCell and not originalCell.permanent then
+                    originalCell.ballType = bubble.ballType
+                    originalCell.occupied = true
+                    originalCell.tier = bubble.tier
+                end
+            else
+                -- Restore tier bubble to original position
+                if bubble.type == "tier1" then
+                    for _, idx in ipairs(bubble.tierData.triangle) do
+                        self.cells[idx].ballType = bubble.tierData.ballType
+                        self.cells[idx].occupied = true
+                        self.cells[idx].tier = "tier1"
+                    end
+                    self.tierOnePositions[bubble.tierIdx] = bubble.tierData
+                elseif bubble.type == "tier2" then
+                    for _, idx in ipairs(bubble.tierData.pattern) do
+                        self.cells[idx].ballType = bubble.tierData.sprite
+                        self.cells[idx].occupied = true
+                        self.cells[idx].tier = "tier2"
+                    end
+                    self.tierTwoPositions[bubble.tierIdx] = bubble.tierData
+                elseif bubble.type == "tier3" then
+                    for _, idx in ipairs(bubble.tierData.pattern) do
+                        self.cells[idx].ballType = bubble.tierData.sprite
+                        self.cells[idx].occupied = true
+                        self.cells[idx].tier = "tier3"
+                    end
+                    self.tierThreePositions[bubble.tierIdx] = bubble.tierData
+                end
+            end
+        end
+    end
+    
+    return true  -- Always succeed - we preserve bubbles by restoring them if needed
+end
+
 -- Place tier 1 bubble in triangle formation
 function Grid:placeTierOne(triangle, ballType, centerX, centerY)
-    -- Clear any existing bubbles in triangle positions
-    for _, idx in ipairs(triangle) do
-        self:clearCell(idx)
-    end
+    -- Use ripple displacement to make space for tier 1 formation
+    self:rippleDisplace(triangle, 3)
     
     -- Mark all triangle cells as tier 1
     for _, idx in ipairs(triangle) do
@@ -1236,6 +1641,160 @@ function Grid:findValidTierThreePlacement(centerX, centerY)
     return nil, nil
 end
 
+-- Flexible placement functions for ripple displacement (allow basic bubble displacement)
+
+-- Find flexible tier 1 triangle placement (can displace basic bubbles)
+function Grid:findFlexibleTriangleForTierOne(centerX, centerY)
+    local candidates = self:findNearestValidCells(centerX, centerY, 8)
+    if #candidates == 0 then return nil end
+    
+    -- Try to find any valid triangle pattern
+    for _, candidate in ipairs(candidates) do
+        local candidateIdx = candidate.idx
+        local neighbors = self:getNeighbors(candidateIdx)
+        if #neighbors >= 6 then
+            -- Try each pie slice triangle
+            local pieSlices = {
+                {candidateIdx, neighbors[2], neighbors[4]}, -- 0° right
+                {candidateIdx, neighbors[1], neighbors[2]}, -- 60° up-right  
+                {candidateIdx, neighbors[3], neighbors[1]}, -- 120° up-left
+                {candidateIdx, neighbors[5], neighbors[3]}, -- 180° left
+                {candidateIdx, neighbors[6], neighbors[5]}, -- 240° down-left
+                {candidateIdx, neighbors[4], neighbors[6]}  -- 300° down-right
+            }
+            
+            for _, triangle in ipairs(pieSlices) do
+                local isValid = true
+                for _, idx in ipairs(triangle) do
+                    local cell = self.cells[idx]
+                    if not self.positions[idx] or not cell or cell.permanent or 
+                       (cell.occupied and cell.tier ~= "basic") then -- Allow displacing basic bubbles only
+                        isValid = false
+                        break
+                    end
+                end
+                
+                if isValid then
+                    return triangle
+                end
+            end
+        end
+    end
+    return nil
+end
+
+-- Find flexible tier 2 pattern placement (can displace basic bubbles)  
+function Grid:findFlexibleTierTwoPlacement(centerX, centerY)
+    local candidates = self:findNearestValidCells(centerX, centerY, 15)
+    
+    for _, candidate in ipairs(candidates) do
+        local centerIdx = candidate.idx
+        local neighbors = self:getNeighbors(centerIdx)
+        
+        if #neighbors >= 6 then
+            local validPattern = {centerIdx}
+            local allValid = true
+            
+            -- Check center allows basic displacement
+            local centerCell = self.cells[centerIdx]
+            if centerCell.permanent or (centerCell.occupied and centerCell.tier ~= "basic") then
+                allValid = false
+            end
+            
+            -- Check neighbors (allow displacing basic bubbles)
+            if allValid then
+                for _, neighborIdx in ipairs(neighbors) do
+                    local cell = self.cells[neighborIdx]
+                    if cell and not cell.permanent and 
+                       (not cell.occupied or cell.tier == "basic") then -- Allow basic displacement
+                        validPattern[#validPattern + 1] = neighborIdx
+                    else
+                        allValid = false
+                        break
+                    end
+                end
+            end
+            
+            if allValid and #validPattern >= 7 then
+                return centerIdx, validPattern
+            end
+        end
+    end
+    return nil, nil
+end
+
+-- Find flexible tier 3 pattern placement (can displace basic bubbles)
+function Grid:findFlexibleTierThreePlacement(centerX, centerY)
+    local candidates = self:findNearestValidCells(centerX, centerY, 25)
+    
+    for _, candidate in ipairs(candidates) do
+        local centerIdx = candidate.idx
+        local neighbors = self:getNeighbors(centerIdx)
+        
+        if #neighbors >= 6 then
+            local pattern = {centerIdx}
+            local allValid = true
+            
+            -- Check center (allow basic displacement)
+            local centerCell = self.cells[centerIdx]
+            if centerCell.permanent or (centerCell.occupied and centerCell.tier ~= "basic") then
+                allValid = false
+            end
+            
+            -- Add first ring (allow basic displacement)
+            if allValid then
+                for _, neighborIdx in ipairs(neighbors) do
+                    local cell = self.cells[neighborIdx]
+                    if cell and not cell.permanent and 
+                       (not cell.occupied or cell.tier == "basic") then -- Allow basic displacement
+                        pattern[#pattern + 1] = neighborIdx
+                    else
+                        allValid = false
+                        break
+                    end
+                end
+            end
+            
+            -- Add second ring (allow basic displacement)
+            if allValid then
+                local secondRingCells = {}
+                for _, firstRingIdx in ipairs(neighbors) do
+                    local secondRing = self:getNeighbors(firstRingIdx)
+                    for _, secondRingIdx in ipairs(secondRing) do
+                        -- Skip if already in pattern
+                        local alreadyInPattern = false
+                        for _, patternIdx in ipairs(pattern) do
+                            if patternIdx == secondRingIdx then
+                                alreadyInPattern = true
+                                break
+                            end
+                        end
+                        
+                        -- Allow if basic bubble or empty
+                        if not alreadyInPattern then
+                            local cell = self.cells[secondRingIdx]
+                            if cell and not cell.permanent and 
+                               (not cell.occupied or cell.tier == "basic") then -- Allow basic displacement
+                                secondRingCells[#secondRingCells + 1] = secondRingIdx
+                            end
+                        end
+                    end
+                end
+                
+                -- Add up to 12 second-ring cells
+                for i = 1, math.min(12, #secondRingCells) do
+                    pattern[#pattern + 1] = secondRingCells[i]
+                end
+                
+                if #pattern >= 19 then
+                    return centerIdx, pattern
+                end
+            end
+        end
+    end
+    return nil, nil
+end
+
 -- Place tier 2 bubble with grid snapping animation
 function Grid:placeTierTwo(centerX, centerY, sprite)
     -- Find valid position for full 7-cell pattern
@@ -1332,8 +1891,8 @@ function Grid:handleCreepCycle()
         -- Shot 3: 2x Tier 2 creeps
         self:spawnCreeps(2, "tier2", 8)
     elseif self.creepCycleCount == 4 then
-        -- Shot 4: Start marching existing creeps left
-        self:startCreepMarch()
+        -- Shot 4: Creeps will march after battle popup completes
+        -- Don't start march immediately - let popup system handle it
     elseif self.creepCycleCount >= 5 then
         -- Shot 5+: Reset cycle
         self.creepCycleCount = 1
@@ -1459,9 +2018,35 @@ function Grid:draw()
     self:drawTroops()
     self:drawAnimations()
     self:drawUI()
+    self:drawPopup()
     if self.gameState == "gameOver" then
         self:drawGameOverScreen()
     end
+end
+
+-- Draw popup overlay
+function Grid:drawPopup()
+    if not self.popup.active then return end
+    
+    -- Calculate centered position (screen is 400x240)
+    local screenWidth, screenHeight = 400, 240
+    local popupX = (screenWidth - self.popup.width) / 2
+    local popupY = (screenHeight - self.popup.height) / 2
+    
+    -- Draw white background
+    gfx.setColor(gfx.kColorWhite)
+    gfx.fillRect(popupX, popupY, self.popup.width, self.popup.height)
+    
+    -- Draw border
+    gfx.setColor(gfx.kColorBlack)
+    gfx.drawRect(popupX, popupY, self.popup.width, self.popup.height)
+    
+    -- Draw text centered in popup
+    gfx.setColor(gfx.kColorBlack)
+    local textWidth, textHeight = gfx.getTextSize(self.popup.text)
+    local textX = popupX + (self.popup.width - textWidth) / 2
+    local textY = popupY + (self.popup.height - textHeight) / 2
+    gfx.drawText(self.popup.text, textX, textY)
 end
 
 -- Draw grid cells (debug mode)
@@ -1627,9 +2212,9 @@ function Grid:spawnTroopsFromBubbles()
         self:spawnTroop(tierData.centerX, tierData.centerY, "tier2", TROOP_SIZE_TIER2, rallyPos)
     end
     
-    -- Spawn from Tier 3 bubbles
+    -- Spawn from Tier 3 bubbles (rally to fixed point 7,3)
     for idx, tierData in pairs(self.tierThreePositions) do
-        local rallyPos = self:getRandomRallyPoint()
+        local rallyPos = {x = 7 * 20 + 10, y = 3 * 17.32 + 10} -- Rally point 7,3
         self:spawnTroop(tierData.centerX, tierData.centerY, "tier3", TROOP_SIZE_TIER3, rallyPos)
     end
 end
@@ -2092,6 +2677,7 @@ function Grid:drawTroops()
             sprite = self.bubbleSprites.troops.tier2 or sprite
         elseif troop.tier == "tier3" then
             sprite = self.bubbleSprites.troops.tier3 or sprite
+            offset = 16  -- 32x32 sprite needs 16px offset for proper centering
         end
         
         sprite:draw(troop.x - offset, troop.y - offset)
@@ -2101,12 +2687,37 @@ end
 function Grid:handleTroopShotCounting()
     self.troopShotCounter = self.troopShotCounter + 1
     
-    -- Shot 4: march all troops off screen and reset cycle
+    -- Shot 4: enter battle preparation mode instead of immediate marching
     if self.troopShotCounter == 4 then
-        self:marchTroopsOffscreen()
+        self.battleState = "waiting_for_merges"
         self.troopShotCounter = 0  -- Reset for next cycle
     end
 end
+
+-- Battle popup system
+function Grid:startBattlePopup()
+    self.battleState = "show_popup"
+    self.popup.active = true
+    self.popup.frame = 0
+    self.popup.text = "Attack!"
+end
+
+function Grid:updateBattlePopup()
+    if self.popup.active then
+        self.popup.frame = self.popup.frame + 1
+        
+        if self.popup.frame >= 63 then
+            -- Popup duration complete - start the battle
+            self.popup.active = false
+            self.battleState = "normal"  -- Return to normal after battle starts
+            
+            -- Now start the actual battle actions
+            self:marchTroopsOffscreen()
+            self:startCreepMarch()
+        end
+    end
+end
+
 -- Spawn troops when merges/tiers complete (called from animation completions)
 function Grid:spawnTroopsForShot()
     -- Always spawn from existing tier bubbles
@@ -2153,6 +2764,11 @@ function Grid:drawAnimations()
             local currentX = anim.startX + (anim.endX - anim.startX) * progress
             local currentY = anim.startY + (anim.endY - anim.startY) * progress
             self.bubbleSprites.tier3[anim.sprite]:draw(currentX - 42, currentY - 42)
+        elseif anim.type == "tier3_flash" then
+            -- Only draw during hold and flash states, not during off states
+            if anim.flashState == "hold" or anim.flashState == "flash1" or anim.flashState == "flash2" then
+                self.bubbleSprites.tier3[anim.sprite]:draw(anim.centerX - 42, anim.centerY - 42)
+            end
         end
     end
 end
