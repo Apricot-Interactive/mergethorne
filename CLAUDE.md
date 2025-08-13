@@ -1,12 +1,111 @@
 # Mergethorne - Development Guide
 
+## 🤖 AI Development Guidelines
+
+**CRITICAL READING**: This section contains essential information for AI assistants working on Mergethorne. Read this thoroughly before making any code changes.
+
+### Core Development Principles
+
+1. **Animation-Driven Architecture**: Most game state changes happen through animation completion, not immediate updates. Always check `self.isAnimating` before major state changes.
+
+2. **State Consistency**: The game uses multiple interconnected state tables (cells, tierOnePositions, tierTwoPositions, troops, creeps). Changes to one often require updates to others.
+
+3. **Rally Point Integrity**: Troops must always have valid rally points. When modifying troop systems, ensure rally point assignment logic remains intact.
+
+4. **Coordinate System Awareness**: 
+   - Grid indices: 1-300 (hex grid cells)
+   - Pixel coordinates: Actual screen positions
+   - Always convert properly between systems
+
+### Common AI Modification Patterns
+
+#### Adding New Tier Combinations
+1. Update `MergeConstants.lua` with new sprite mappings
+2. Modify magnetic detection logic in `checkMagneticCombinations()`
+3. Add corresponding troop spawning behavior
+4. Test thoroughly with tier progression flow
+
+#### Modifying Troop Behavior
+1. Focus on rally point assignment in `getBubbleRallyPoint()` and `findNearestRallyPoint()`
+2. Update movement states in `updateTroops()`
+3. Ensure troop transfer logic in `transferTroopsToNewRally()` handles new cases
+4. Test with bubble merging scenarios
+
+#### Balancing Game Mechanics
+1. Check constants at top of `grid.lua` first
+2. Look for magic numbers in `MergeConstants.lua`
+3. Consider animation timing effects on gameplay feel
+4. Test with various bubble configurations
+
+#### Adding New Animations
+1. Add animation type to `updateAnimations()` function
+2. Add rendering logic to `drawAnimations()` function  
+3. Ensure proper cleanup when animation completes
+4. Consider interaction with `self.isAnimating` flag
+
+### Critical Areas (Modify with Extreme Care)
+
+⚠️ **Collision Detection**: Visual collision uses pixel-perfect detection with buffers. Changes here affect core gameplay feel.
+
+⚠️ **Animation State Management**: Corrupted animation state can break the entire game. Always ensure animations clean up properly.
+
+⚠️ **Grid Boundary Logic**: The hex grid has complex cutout areas and permanent boundaries. Changes require extensive testing.
+
+⚠️ **Rally Point Assignment**: Troops without valid rally points will cause runtime errors. Always ensure fallback logic.
+
+### Testing Protocols for AI
+
+When making changes, always test these scenarios:
+1. Basic bubble merge → Tier 1 formation → Troop spawning
+2. Tier 1 magnetic combination → Tier 2 formation → Troop transfer
+3. Tier 2 + Tier 1 magnetic → Tier 3 flash → Despawn + troop rally
+4. Combat cycles: Creep spawning, staging, marching
+5. Troop rally behavior during bubble merges
+6. Game over and restart functionality
+
+### Function Modification Guidelines
+
+#### High-Impact Functions (Test Extensively)
+- `updateAnimations()` - Core animation state management
+- `checkMagneticCombinations()` - Tier progression logic
+- `spawnTroop()` - Troop creation and rally assignment
+- `transferTroopsToNewRally()` - Bubble merge troop handling
+- `updateTroops()` - Troop movement and state management
+
+#### Safe-to-Modify Functions (Lower Risk)
+- Rendering functions (`draw*()`) - Visual only, no game state
+- Constants and configuration values
+- Debug and UI functions
+- Sprite loading and initialization
+
+#### Debug Tools Available
+- `self.debugView` - Toggle with Left D-pad, shows grid and boundaries
+- Print statements - Use sparingly, check performance impact
+- Animation frame counters - Monitor animation timing
+
+### Data Flow Understanding
+
+**Bubble Lifecycle**: Basic → Merge Detection → Tier 1 Creation → Magnetic Detection → Tier 2/3 Formation → Troop Spawning → Rally Assignment
+
+**Troop Lifecycle**: Spawn → Rally Assignment → Movement to Rally → Clustered → March Signal → March Formation → Off-screen
+
+**Combat Cycle**: Shot Counter → Creep Spawn (cycle-based) → Staging → Hold → March (Shot 4) → Reset
+
+### Common Pitfalls for AI
+
+1. **Modifying game state during animations** - Always check `self.isAnimating`
+2. **Breaking rally point chains** - Troops without rally points crash the game
+3. **Coordinate system confusion** - Grid indices vs pixel coordinates
+4. **Animation cleanup failure** - Leads to memory leaks and state corruption
+5. **Ignoring boundary constraints** - Troops/creeps moving into invalid areas
+
 ## Project Overview
 
 Mergethorne is a bubble shooter game for the Playdate console featuring hex grid mechanics and multi-tier bubble progression. The project underwent a complete architecture refactor to simplify and optimize the codebase while preserving all original functionality.
 
 ### Transformation Summary
 - **Before**: 1,183 lines of complex, overlapping systems
-- **After**: ~1900 lines with complete feature set including combat systems
+- **After**: ~2800 lines with complete feature set including combat systems
 - **Evolution**: Added tier progression, enemy creeps, allied troops, and unified collision
 - **Performance**: Maintained 60fps stable gameplay with complex unit interactions
 

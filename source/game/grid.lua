@@ -1,18 +1,60 @@
--- Mergethorne Grid System - Complete Implementation
--- 
--- Architecture Overview:
--- - Single unified cell system: {ballType, occupied, permanent, tier}
--- - 20px hex grid, visual collision detection with immediate snapping
--- - Merge detection via flood-fill, animated ball convergence and tier progression
--- - Complete tier progression: Basic → Tier 1 → Tier 2 → Tier 3
--- - Enemy creep spawning system with staging positions and march cycles
--- - Allied troop spawning system with rally point clustering and march coordination
--- - Unified collision system respecting 1px sprite buffers across all unit types
+-- ============================================================================
+-- MERGETHORNE GRID SYSTEM - COMPLETE IMPLEMENTATION
+-- ============================================================================
 --
--- Performance: 60fps stable, ~1900 lines with full feature set
--- Design principle: Clean separation of concerns, boundary-aware positioning
+-- 🤖 AI DEVELOPMENT GUIDE:
+-- This file contains the complete game logic for a bubble shooter with tier progression
+-- and combat systems. When making changes, follow these guidelines:
+--
+-- 🎯 KEY PRINCIPLES:
+-- • Animation-driven: Most game state changes happen via animation completion
+-- • State consistency: Always check self.isAnimating before major state changes  
+-- • Coordinate systems: Grid uses indices (1-300), visual uses pixel coordinates
+-- • Rally points: Troops always have assigned rally points, movement is gentle/smooth
+-- • Tier progression: Each tier has specific placement rules and troop spawning behavior
+--
+-- 🔧 COMMON MODIFICATIONS:
+-- • Adding new tier combinations: Update MergeConstants.lua + magnetic detection logic
+-- • Changing troop behavior: Focus on rally point assignment and movement states
+-- • Adjusting balance: Look for constants at top of file and in MergeConstants
+-- • New animations: Add to updateAnimations() and drawAnimations() functions
+-- • Debug features: Use self.debugView flag for conditional rendering
+--
+-- ⚠️ CRITICAL AREAS (Modify carefully):
+-- • Collision detection (visual + physics)
+-- • Animation state management (prevents corrupted game state)
+-- • Rally point assignment (troops must always have valid targets)
+-- • Grid boundary logic (cutout areas and permanent boundaries)
+--
+-- ARCHITECTURE OVERVIEW:
+-- ┌─────────────────┬─────────────────┬─────────────────────────────────────┐
+-- │ CORE SYSTEMS    │ COMBAT SYSTEMS  │ PROGRESSION SYSTEMS                 │
+-- ├─────────────────┼─────────────────┼─────────────────────────────────────┤
+-- │ • Grid & Input  │ • Enemy Creeps  │ • Basic → Tier 1 (3-merge)         │
+-- │ • Ball Physics  │ • Allied Troops │ • Tier 1 → Tier 2 (magnetic)       │
+-- │ • Collision     │ • Rally Points  │ • Tier 2 → Tier 3 (magnetic)       │
+-- │ • Rendering     │ • March Cycles  │ • Tier 3 → Despawn (after troop)   │
+-- └─────────────────┴─────────────────┴─────────────────────────────────────┘
+--
+-- DATA STRUCTURES:
+-- • cells[idx] = {ballType, occupied, permanent, tier} - Single unified cell system
+-- • positions[idx] = {x, y} - 20px hex grid coordinates
+-- • tierOnePositions[idx] = {centerX, centerY, ballType, triangle} - Tier 1 bubbles
+-- • tierTwoPositions[idx] = {centerX, centerY, sprite, pattern} - Tier 2 bubbles  
+-- • troops[] = {x, y, targetX, targetY, tier, size, marching, rallied, rallyPoint}
+-- • creeps[] = {x, y, targetX, targetY, tier, size, staging}
+-- • animations[] = {type, frame, ...} - All visual animations
+--
+-- GAME FLOW:
+-- 1. Input → Aim → Shoot → Ball Physics → Collision → Grid Snap
+-- 2. Merge Detection → Animation → Tier Progression → Troop Spawning
+-- 3. Combat Cycles → Rally → March → Battle
+--
+-- PERFORMANCE: 60fps stable, ~2800 lines with full feature set
+-- DESIGN PRINCIPLE: Clean separation of concerns, boundary-aware positioning
 
 local MergeConstants = import("game/mergeConstants")
+local CombatConstants = import("game/combatConstants")
 
 local pd <const> = playdate
 local gfx <const> = pd.graphics
@@ -45,6 +87,7 @@ local CREEP_STAGING_POSITIONS <const> = {
 local CREEP_SPAWN_OFFSET <const> = 100  -- Pixels to right of staging spot
 local CREEP_MOVE_SPEED <const> = 2
 local CREEP_SIZE <const> = 3  -- 4px sprite with 1px transparent edge
+local CREEP_SIZE_TIER3 <const> = 24  -- 25px sprite with 1px transparent edge
 
 -- Troop system constants
 -- Multiple rally points to reduce clustering and jitter
@@ -58,7 +101,7 @@ local TROOP_MOVE_SPEED <const> = 2
 local TROOP_SIZE_BASIC <const> = 3   -- 4px sprite with 1px transparent buffer
 local TROOP_SIZE_TIER1 <const> = 4   -- 5px sprite with 1px transparent buffer  
 local TROOP_SIZE_TIER2 <const> = 8   -- 9px sprite with 1px transparent buffer
-local TROOP_SIZE_TIER3 <const> = 16  -- 32px sprite with 1px transparent buffer
+local TROOP_SIZE_TIER3 <const> = 24  -- 25px sprite with 1px transparent buffer
 local TROOP_MARCH_SPEED <const> = 2
 
 local Grid = {}
@@ -66,6 +109,13 @@ local Grid = {}
 -- ============================================================================
 -- SPRITE LOADING & INITIALIZATION
 -- ============================================================================
+--
+-- PURPOSE: Load all sprite sheets and split them into individual sprites
+-- DEPENDENCIES: Playdate graphics system, asset files in assets/sprites/
+-- CROSS-REFS: Used by Grid:init(), referenced in all draw functions
+--
+-- AI_NOTE: Sprite loading is synchronous and happens once at startup.
+-- All sprites are stored in self.bubbleSprites for efficient access during rendering.
 
 -- Sprite loading (Basic + Tier + Creep + Troop systems)
 local function loadBubbleSprites()
@@ -119,6 +169,7 @@ local function loadBubbleSprites()
     sprites.creeps.basic = gfx.image.new("assets/sprites/creeps-basic")
     sprites.creeps.tier1 = gfx.image.new("assets/sprites/creeps-tier-one")
     sprites.creeps.tier2 = gfx.image.new("assets/sprites/creeps-tier-two")
+    sprites.creeps.tier3 = gfx.image.new("assets/sprites/creeps-tier-three")
     
     -- Load troop sprites
     sprites.troops.basic = gfx.image.new("assets/sprites/troops-basic")
@@ -130,10 +181,23 @@ local function loadBubbleSprites()
 end
 
 -- ============================================================================
--- CORE GAME SYSTEMS
+-- CORE GAME SYSTEMS  
 -- ============================================================================
+--
+-- PURPOSE: Grid initialization, boundary setup, input handling, ball physics
+-- BEHAVIOR: Handles the main game loop: input → physics → collision → merge detection
+-- CROSS-REFS: Calls tier progression (lines 925+), triggers troop spawning (lines 2224+)
+--
+-- AI_NOTE: This section contains the fundamental game mechanics. Ball physics uses
+-- visual collision detection with immediate grid snapping rather than complex physics.
+-- Input is processed every frame, but ball physics only when a ball is in flight.
 
 -- Initialize grid system
+-- PURPOSE: Set up all game systems and load resources
+-- PARAMS: None
+-- RETURNS: None  
+-- SIDE_EFFECTS: Loads sprites, creates grid, sets up boundaries, initializes game state
+-- AI_NOTE: This is the main entry point. Must be called before any other Grid functions.
 function Grid:init()
     self.bubbleSprites = loadBubbleSprites()
     self:createGrid()
@@ -164,7 +228,9 @@ function Grid:createGrid()
                 ballType = nil,
                 occupied = false,
                 permanent = false,
-                tier = nil  -- Phase 2: "basic", "tier1", "tier2"
+                tier = nil,  -- Phase 2: "basic", "tier1", "tier2"
+                health = nil,     -- Current health (nil for empty cells)
+                maxHealth = nil   -- Maximum health (nil for empty cells)
             }
         end
     end
@@ -245,10 +311,8 @@ function Grid:initializeStartingGrid()
         {{6,6}, "D"}, {{7,7}, "D"}, {{8,6}, "D"},
         -- C cells: 6,7 7,8 7,9 8,7
         {{6,7}, "C"}, {{7,8}, "C"}, {{7,9}, "C"}, {{8,7}, "C"},
-        -- A cells: 6,8 5,8 5,9 4,8
-        {{6,8}, "A"}, {{5,8}, "A"}, {{5,9}, "A"}, {{4,8}, "A"},
-        -- E cells: 8,8 9,8 9,9 10,8
-        {{8,8}, "E"}, {{9,8}, "E"}, {{9,9}, "E"}, {{10,8}, "E"},
+        -- C cells: 6,8 8,8 (changed to match 6,7 type)
+        {{6,8}, "C"}, {{8,8}, "C"},
         -- B cells: 6,9 7,10 8,9
         {{6,9}, "B"}, {{7,10}, "B"}, {{8,9}, "B"},
         -- D cells: 6,10 7,11 8,10
@@ -267,6 +331,8 @@ function Grid:initializeStartingGrid()
                 self.cells[idx].ballType = letterTypes[letter]
                 self.cells[idx].occupied = true
                 self.cells[idx].tier = "basic"
+                self.cells[idx].maxHealth = CombatConstants.getBubbleHealth("basic")
+                self.cells[idx].health = self.cells[idx].maxHealth
             end
         end
     end
@@ -277,7 +343,8 @@ function Grid:setupGameState()
     self.angle = 0
     self.ball = nil
     self.shooterBallType = math.random(1, 5)
-    self.onDeckBallType = math.random(1, 5)
+    self.onDeckBallType = math.random(1, 5)  -- Load normally at start
+    self.shooterDelayTimer = 0  -- Timer for 2-second delay after shooting
     self.gameState = "playing"
     self.showDebug = false
     
@@ -298,15 +365,20 @@ function Grid:setupGameState()
     self.magnetismDelayCounter = 0  -- 8-frame delay before checking magnetism
     
     -- Creep system
-    self.creeps = {}  -- {x, y, targetX, targetY, animating, staged, tier, size, marching}
+    self.creeps = {}  -- {x, y, targetX, targetY, animating, staged, tier, size, marching, hitpoints, maxHitpoints, damage, attackTimer, target}
     self.stagingOccupied = {}  -- Track which staging positions are occupied
     self.creepCycleCount = 0  -- Track shots for creep spawn cycles (1-5)
     
     -- Troop system
-    self.troops = {}  -- {x, y, targetX, targetY, tier, size, marching, rallied}
+    self.troops = {}  -- {x, y, targetX, targetY, tier, size, marching, rallied, hitpoints, maxHitpoints, damage, attackTimer, target}
     self.troopShotCounter = 0  -- Independent shot counter for troop cycles
     self.rallyPointOccupied = {}  -- Track positions around rally point
     self.troopMarchActive = false  -- Track when troops are in march mode
+    
+    -- Combat system
+    self.projectiles = {}  -- {x, y, velocityX, velocityY, damage, size, lifetime, owner}
+    self.battleActive = false  -- True when units are engaged in combat
+    self.unitsInCombat = {}  -- Track which units are currently fighting
     
     -- Battle and popup system
     self.battleState = "normal"  -- "normal", "waiting_for_merges", "show_popup", "battle"
@@ -339,6 +411,12 @@ function Grid:updateAimDirection()
 end
 
 -- Main game input handling
+-- PURPOSE: Process all player input and update game state accordingly  
+-- PARAMS: None
+-- RETURNS: None
+-- SIDE_EFFECTS: Updates shooter position/angle, shoots ball, toggles debug, handles game over
+-- AI_NOTE: Input is processed every frame. Handles game state transitions and input blocking.
+-- Crank controls shooter Y position, D-pad controls aim angle (271°-89° range).
 function Grid:handleInput()
     if self.gameState == "gameOver" then
         if pd.buttonJustPressed(pd.kButtonA) then
@@ -391,7 +469,7 @@ function Grid:handleInput()
     elseif pd.buttonJustPressed(pd.kButtonB) then
         self:init() -- Reset level to starting state
     elseif pd.buttonJustPressed(pd.kButtonA) and not self.ball and 
-           self.shooterBallType and not self.isAnimating then
+           self.shooterBallType and not self.isAnimating and self.shooterDelayTimer <= 0 then
         self:shootBall()
     end
 end
@@ -407,8 +485,223 @@ function Grid:shootBall()
         bounces = 0  -- Track bounce count (max 3)
     }
     
+    -- Only apply 2-second delay on shot 4 (when troops march)
+    if self.troopShotCounter == 4 then
+        self.shooterDelayTimer = 120  -- 2 seconds at 60fps
+        self.shooterBallType = nil  -- Clear current ball during delay
+    end
+    
     -- Handle creep spawning cycles
     self:handleCreepCycle()
+end
+
+-- Check if a position collides with any bubble (with 2px buffer)
+function Grid:checkBubbleCollision(x, y, unitSize)
+    unitSize = unitSize or 3  -- Default unit size
+    local totalRadius = unitSize + 10 + 2  -- unit + bubble + buffer
+    
+    for idx, cell in pairs(self.cells) do
+        if cell.occupied and cell.health and cell.health > 0 then
+            local bubblePos = self.positions[idx]
+            if bubblePos then
+                local dx = x - bubblePos.x
+                local dy = y - bubblePos.y
+                local distance = math.sqrt(dx*dx + dy*dy)
+                
+                if distance < totalRadius then
+                    return true  -- Collision detected
+                end
+            end
+        end
+    end
+    return false  -- No collision
+end
+
+-- Find nearest open space from current position (escape path for troops)
+function Grid:findNearestOpenSpace(x, y, unitSize)
+    unitSize = unitSize or 3
+    local bestPos = {x = x, y = y}
+    local bestDistance = math.huge
+    
+    -- Search in expanding circles
+    for radius = 5, 50, 5 do
+        for angle = 0, 360, 15 do
+            local radians = math.rad(angle)
+            local testX = x + math.cos(radians) * radius
+            local testY = y + math.sin(radians) * radius
+            
+            -- Keep within screen bounds
+            if testX >= 20 and testX <= 380 and testY >= 20 and testY <= 220 then
+                if not self:checkBubbleCollision(testX, testY, unitSize) then
+                    local distance = radius
+                    if distance < bestDistance then
+                        bestDistance = distance
+                        bestPos = {x = testX, y = testY}
+                    end
+                end
+            end
+        end
+        
+        -- Return first valid position found
+        if bestDistance < math.huge then
+            return bestPos
+        end
+    end
+    
+    return bestPos  -- Return original position if no open space found
+end
+
+-- Find path around bubble obstacles (improved avoidance with stuck prevention)
+function Grid:findAvoidancePath(fromX, fromY, toX, toY, unitSize, allowThroughBubbles, preferDirect)
+    unitSize = unitSize or 3
+    allowThroughBubbles = allowThroughBubbles or false
+    preferDirect = preferDirect or false  -- For combat units pursuing targets
+    local dx = toX - fromX
+    local dy = toY - fromY
+    local distance = math.sqrt(dx*dx + dy*dy)
+    
+    if distance == 0 then return fromX, fromY end
+    
+    local moveSpeed = 2  -- Default move speed
+    local stepX = (dx / distance) * moveSpeed
+    local stepY = (dy / distance) * moveSpeed
+    
+    -- Try the direct path first (unless specifically avoiding bubbles)
+    local testX = fromX + stepX
+    local testY = fromY + stepY
+    
+    if allowThroughBubbles or not self:checkBubbleCollision(testX, testY, unitSize) then
+        return testX, testY  -- Direct path is clear or allowed
+    end
+    
+    -- If preferDirect (combat units), do fewer avoidance attempts before forcing through
+    local maxAvoidanceAttempts = preferDirect and 3 or 8
+    
+    -- Try larger avoidance maneuvers around bubbles
+    local perpX = -stepY  -- Perpendicular to movement direction
+    local perpY = stepX
+    
+    -- Try multiple avoidance angles and distances
+    local avoidanceOptions = {
+        -- Small side steps
+        {stepX * 0.3 + perpX * 1.5, stepY * 0.3 + perpY * 1.5},
+        {stepX * 0.3 - perpX * 1.5, stepY * 0.3 - perpY * 1.5},
+        -- Medium side steps
+        {stepX * 0.1 + perpX * 2.5, stepY * 0.1 + perpY * 2.5},
+        {stepX * 0.1 - perpX * 2.5, stepY * 0.1 - perpY * 2.5},
+        -- Large bypass moves
+        {perpX * 3.0, perpY * 3.0},
+        {-perpX * 3.0, -perpY * 3.0},
+        -- Retreat and side-step
+        {-stepX * 0.5 + perpX * 2.0, -stepY * 0.5 + perpY * 2.0},
+        {-stepX * 0.5 - perpX * 2.0, -stepY * 0.5 - perpY * 2.0}
+    }
+    
+    -- Try each avoidance option (limited attempts for combat units)
+    for i, option in ipairs(avoidanceOptions) do
+        if i > maxAvoidanceAttempts then break end
+        
+        local testX = fromX + option[1]
+        local testY = fromY + option[2]
+        
+        -- Keep within screen bounds
+        if testX >= 20 and testX <= 380 and testY >= 20 and testY <= 220 then
+            if allowThroughBubbles or not self:checkBubbleCollision(testX, testY, unitSize) then
+                return testX, testY
+            end
+        end
+    end
+    
+    -- For combat units preferring direct movement, try forcing through bubbles sooner
+    if preferDirect and allowThroughBubbles then
+        local testX = fromX + stepX
+        local testY = fromY + stepY
+        
+        -- Clamp to screen bounds
+        testX = math.max(20, math.min(380, testX))
+        testY = math.max(20, math.min(220, testY))
+        
+        return testX, testY  -- Force movement toward target
+    end
+    
+    -- If all paths blocked, try moving away from nearest bubble
+    local nearestBubbleX, nearestBubbleY = self:findNearestBubble(fromX, fromY)
+    if nearestBubbleX then
+        local awayX = fromX - (nearestBubbleX - fromX) * 0.3
+        local awayY = fromY - (nearestBubbleY - fromY) * 0.3
+        
+        if awayX >= 20 and awayX <= 380 and awayY >= 20 and awayY <= 220 then
+            if allowThroughBubbles or not self:checkBubbleCollision(awayX, awayY, unitSize) then
+                return awayX, awayY
+            end
+        end
+    end
+    
+    -- STUCK PREVENTION: If allowThroughBubbles is true, force movement toward target
+    if allowThroughBubbles then
+        local testX = fromX + stepX
+        local testY = fromY + stepY
+        
+        -- Clamp to screen bounds
+        testX = math.max(20, math.min(380, testX))
+        testY = math.max(20, math.min(220, testY))
+        
+        return testX, testY  -- Force movement even through bubbles
+    end
+    
+    -- Last resort: don't move (only when not allowing through bubbles)
+    return fromX, fromY
+end
+
+-- Find nearest bubble position for avoidance calculations
+function Grid:findNearestBubble(x, y)
+    local nearestX, nearestY = nil, nil
+    local nearestDistance = math.huge
+    
+    for idx, cell in pairs(self.cells) do
+        if cell.occupied and cell.health and cell.health > 0 then
+            local bubblePos = self.positions[idx]
+            if bubblePos then
+                local dx = x - bubblePos.x
+                local dy = y - bubblePos.y
+                local distance = math.sqrt(dx*dx + dy*dy)
+                
+                if distance < nearestDistance then
+                    nearestDistance = distance
+                    nearestX = bubblePos.x
+                    nearestY = bubblePos.y
+                end
+            end
+        end
+    end
+    
+    return nearestX, nearestY
+end
+
+-- Check if a target is still valid (works for both units and bubbles)
+function Grid:isTargetValid(target)
+    if not target then return false end
+    
+    if target.type == "bubble" then
+        -- Bubble target - check if cell is still occupied and has health
+        return target.cell.occupied and target.cell.health and target.cell.health > 0
+    else
+        -- Unit target - check hitpoints
+        return target.hitpoints and target.hitpoints > 0
+    end
+end
+
+-- Update shooter delay timer and load next ball when ready
+function Grid:updateShooterDelay()
+    if self.shooterDelayTimer > 0 then
+        self.shooterDelayTimer = self.shooterDelayTimer - 1
+        
+        -- Load next ball when delay expires
+        if self.shooterDelayTimer <= 0 then
+            self.shooterBallType = self.onDeckBallType or math.random(1, 5)
+            self.onDeckBallType = math.random(1, 5)
+        end
+    end
 end
 
 -- Main update loop
@@ -421,7 +714,10 @@ function Grid:update()
     self:updateAnimations()
     self:updateCreeps()
     self:updateTroops()
+    self:updateCombat()  -- Handle all combat interactions
+    self:cleanupDeadUnits()  -- Remove dead units from arrays
     self:updateBattlePopup()
+    self:updateShooterDelay()  -- Handle shooter delay timer
     
     -- Handle magnetism delay counter (check Tier 3 first, then Tier 2)
     if self.magnetismDelayCounter > 0 then
@@ -547,11 +843,15 @@ function Grid:handleBallLanding()
         self.cells[landingIdx].ballType = self.ball.ballType
         self.cells[landingIdx].occupied = true
         self.cells[landingIdx].tier = "basic"  -- Phase 2: New balls are basic tier
+        self.cells[landingIdx].maxHealth = CombatConstants.getBubbleHealth("basic")
+        self.cells[landingIdx].health = self.cells[landingIdx].maxHealth
         self.ball = nil
         
-        -- Advance to next ball (infinite shots)
-        self.shooterBallType = self.onDeckBallType
-        self.onDeckBallType = math.random(1, 5)
+        -- Advance to next ball immediately (unless in shot 4 delay)
+        if self.shooterDelayTimer <= 0 then
+            self.shooterBallType = self.onDeckBallType or math.random(1, 5)
+            self.onDeckBallType = math.random(1, 5)
+        end
         
         -- Check for merges
         self:checkForMerges(landingIdx)
@@ -575,11 +875,15 @@ function Grid:handleBallLanding()
                 self.cells[candidate.idx].ballType = self.ball.ballType
                 self.cells[candidate.idx].occupied = true
                 self.cells[candidate.idx].tier = "basic"
+                self.cells[candidate.idx].maxHealth = CombatConstants.getBubbleHealth("basic")
+                self.cells[candidate.idx].health = self.cells[candidate.idx].maxHealth
                 self.ball = nil
                 
-                -- Advance to next ball
-                self.shooterBallType = self.onDeckBallType
-                self.onDeckBallType = math.random(1, 5)
+                -- Advance to next ball immediately (unless in shot 4 delay)
+                if self.shooterDelayTimer <= 0 then
+                    self.shooterBallType = self.onDeckBallType or math.random(1, 5)
+                    self.onDeckBallType = math.random(1, 5)
+                end
                 
                 -- Check for merges
                 self:checkForMerges(candidate.idx)
@@ -713,7 +1017,20 @@ function Grid:startMergeAnimation(chain)
     self.isAnimating = true
 end
 
--- Update all active animations
+-- Update all active animations and handle completion events
+-- PURPOSE: Advance animation frames and trigger completion events
+-- PARAMS: None
+-- RETURNS: None
+-- SIDE_EFFECTS: Updates animation frames, triggers tier progression, spawns troops
+-- AI_NOTE: ANIMATION STATE MACHINE:
+-- This function is critical for game state progression. Each animation type has specific
+-- completion behaviors that trigger game events:
+-- • merge → createTierOne() → troop spawning
+-- • tier1_placement → placeTierOne() → troop spawning  
+-- • tier2_magnetism → placeTierTwo() → troop transfer
+-- • tier3_magnetism → placeTierThree() → troop transfer to center
+-- • tier3_flash → spawn troop → despawn bubble → clear cells
+-- Always ensure animations clean up properly to prevent state corruption.
 function Grid:updateAnimations()
     if not self.isAnimating then return end
     
@@ -743,7 +1060,7 @@ function Grid:updateAnimations()
                 -- Complete tier 1 placement - use the animation's end coordinates
                 self:placeTierOne(anim.triangle, anim.ballType, anim.endX, anim.endY)
                 -- Spawn troop from newly created tier 1
-                local rallyPos = self:getRandomRallyPoint()
+                local rallyPos = self:getBubbleRallyPoint(anim.endX, anim.endY, "tier1")
                 self:spawnTroop(anim.endX, anim.endY, "tier1", TROOP_SIZE_TIER1, rallyPos)
                 -- Don't keep this animation
             else
@@ -751,10 +1068,21 @@ function Grid:updateAnimations()
             end
         elseif anim.type == "tier2_magnetism" then
             if progress >= 1.0 then
-                -- Complete magnetism - remove both tier 1s and create tier 2
+                -- Complete magnetism - collect old rally points before clearing
+                local oldRallyPoints = {
+                    self:getBubbleRallyPoint(anim.tierOne1.centerX, anim.tierOne1.centerY, "tier1"),
+                    self:getBubbleRallyPoint(anim.tierOne2.centerX, anim.tierOne2.centerY, "tier1")
+                }
+                
+                -- Remove both tier 1s and create tier 2
                 self:clearTierOne(anim.tierOne1)
                 self:clearTierOne(anim.tierOne2)
                 self:placeTierTwo(anim.endX, anim.endY, anim.sprite)
+                
+                -- Transfer troops to new tier 2 rally point
+                local newRallyPos = self:getBubbleRallyPoint(anim.endX, anim.endY, "tier2")
+                self:transferTroopsToNewRally(oldRallyPoints, newRallyPos)
+                
                 -- Don't keep this animation
             else
                 activeAnimations[#activeAnimations + 1] = anim
@@ -769,6 +1097,8 @@ function Grid:updateAnimations()
                     self.cells[idx].ballType = anim.sprite
                     self.cells[idx].occupied = true
                     self.cells[idx].tier = "tier2"
+                    self.cells[idx].maxHealth = CombatConstants.getBubbleHealth("tier2")
+                    self.cells[idx].health = self.cells[idx].maxHealth
                 end
                 
                 -- Store at exact grid position
@@ -780,7 +1110,7 @@ function Grid:updateAnimations()
                 }
                 
                 -- Spawn troop from newly created tier 2
-                local rallyPos = self:getRandomRallyPoint()
+                local rallyPos = self:getBubbleRallyPoint(anim.endX, anim.endY, "tier2")
                 self:spawnTroop(anim.endX, anim.endY, "tier2", TROOP_SIZE_TIER2, rallyPos)
                 
                 -- Don't keep this animation
@@ -789,10 +1119,21 @@ function Grid:updateAnimations()
             end
         elseif anim.type == "tier3_magnetism" then
             if progress >= 1.0 then
-                -- Complete tier 3 magnetism - remove tier 1 and tier 2, create tier 3
+                -- Complete tier 3 magnetism - collect old rally points before clearing
+                local oldRallyPoints = {
+                    self:getBubbleRallyPoint(anim.tierOne.centerX, anim.tierOne.centerY, "tier1"),
+                    self:getBubbleRallyPoint(anim.tierTwo.centerX, anim.tierTwo.centerY, "tier2")
+                }
+                
+                -- Remove tier 1 and tier 2, create tier 3
                 self:clearTierOne(anim.tierOne)
                 self:clearTierTwo(anim.tierTwo)
                 self:placeTierThree(anim.endX, anim.endY, anim.sprite)
+                
+                -- Transfer troops to tier 3 center rally point (since tier 3 will despawn)
+                local newRallyPos = {x = anim.endX, y = anim.endY}  -- Center of tier 3
+                self:transferTroopsToNewRally(oldRallyPoints, newRallyPos)
+                
                 -- Don't keep this animation
             else
                 activeAnimations[#activeAnimations + 1] = anim
@@ -807,6 +1148,8 @@ function Grid:updateAnimations()
                     self.cells[idx].ballType = anim.sprite
                     self.cells[idx].occupied = true
                     self.cells[idx].tier = "tier3"
+                    self.cells[idx].maxHealth = CombatConstants.getBubbleHealth("tier3")
+                    self.cells[idx].health = self.cells[idx].maxHealth
                 end
                 
                 -- Start tier3_flash animation instead of immediate troop spawn
@@ -832,41 +1175,51 @@ function Grid:updateAnimations()
             
             if anim.flashState == "hold" then
                 anim.holdFrames = anim.holdFrames + 1
-                if anim.holdFrames >= 8 then
+                if anim.holdFrames >= 20 then
                     anim.flashState = "flash1"
                     anim.frame = 0
                 end
                 activeAnimations[#activeAnimations + 1] = anim
             elseif anim.flashState == "flash1" then
-                if anim.frame >= 4 then
+                if anim.frame >= 12 then
                     anim.flashState = "off1"
                     anim.frame = 0
                 end
                 activeAnimations[#activeAnimations + 1] = anim
             elseif anim.flashState == "off1" then
-                if anim.frame >= 4 then
+                if anim.frame >= 12 then
                     anim.flashState = "flash2"
                     anim.frame = 0
                 end
                 activeAnimations[#activeAnimations + 1] = anim
             elseif anim.flashState == "flash2" then
-                if anim.frame >= 4 then
+                if anim.frame >= 12 then
                     anim.flashState = "off2"
                     anim.frame = 0
                 end
                 activeAnimations[#activeAnimations + 1] = anim
             elseif anim.flashState == "off2" then
-                if anim.frame >= 4 then
-                    -- Flash animation complete - now add to tierThreePositions and spawn troop
-                    self.tierThreePositions[anim.centerIdx] = {
-                        centerX = anim.centerX,
-                        centerY = anim.centerY,
-                        sprite = anim.sprite,
-                        pattern = anim.pattern
-                    }
-                    
-                    local rallyPos = {x = 7 * 20 + 10, y = 3 * 17.32 + 10} -- Rally point 7,3
+                if anim.frame >= 12 then
+                    anim.flashState = "flash3"
+                    anim.frame = 0
+                end
+                activeAnimations[#activeAnimations + 1] = anim
+            elseif anim.flashState == "flash3" then
+                if anim.frame >= 12 then
+                    anim.flashState = "off3"
+                    anim.frame = 0
+                end
+                activeAnimations[#activeAnimations + 1] = anim
+            elseif anim.flashState == "off3" then
+                if anim.frame >= 12 then
+                    -- Flash animation complete - spawn troop then despawn (don't add to tierThreePositions)
+                    local rallyPos = {x = anim.centerX, y = anim.centerY} -- Rally to tier 3 center
                     self:spawnTroop(anim.centerX, anim.centerY, "tier3", TROOP_SIZE_TIER3, rallyPos)
+                    
+                    -- Clear the cells that were occupied by this tier 3
+                    for _, cellIdx in ipairs(anim.pattern) do
+                        self.cells[cellIdx] = {occupied = false, permanent = false}
+                    end
                     
                     -- Don't keep this animation
                 else
@@ -891,8 +1244,36 @@ end
 -- ============================================================================
 -- TIER PROGRESSION SYSTEMS
 -- ============================================================================
+--
+-- PURPOSE: Handle bubble evolution from Basic → Tier 1 → Tier 2 → Tier 3
+-- BEHAVIOR: Manages merge detection, magnetic combinations, and tier placement
+-- CROSS-REFS: Called from updateAnimations(), triggers troop spawning
+--
+-- TIER PROGRESSION FLOW:
+-- ┌─────────────┐  3+ merge   ┌─────────────┐  magnetic   ┌─────────────┐
+-- │ Basic       │ ──────────► │ Tier 1      │ ──────────► │ Tier 2      │
+-- │ (single)    │             │ (triangle)  │             │ (7-cell)    │
+-- └─────────────┘             └─────────────┘             └─────────────┘
+--                                     │                           │
+--                                     │     magnetic              │
+--                                     └─────────────┐             │
+--                                                   ▼             ▼
+--                                             ┌─────────────┐     │
+--                                             │ Tier 3      │◄────┘
+--                                             │ (flash+despawn)
+--                                             └─────────────┘
+--
+-- AI_NOTE: Tier progression is animation-driven. Each tier has specific placement
+-- requirements and triggers troop spawning with bubble-specific rally points.
+-- Tier 3 is special: flashes 3 times, spawns troop, then despawns completely.
 
 -- Phase 2: Create Tier 1 bubble after basic merge
+-- PURPOSE: Convert a basic bubble merge into a Tier 1 triangle formation
+-- PARAMS: centerX, centerY (merge center), ballType (1-5 for different elements)
+-- RETURNS: None
+-- SIDE_EFFECTS: Starts tier1_placement animation, will trigger troop spawning when complete
+-- AI_NOTE: This is called from merge animation completion. Finds best triangle near merge
+-- center, then starts placement animation. If no valid triangle found, merge fails gracefully.
 function Grid:createTierOne(centerX, centerY, ballType)
     local bestTriangle = self:findBestTriangleForTierOne(centerX, centerY)
     if bestTriangle then
@@ -1053,18 +1434,30 @@ function Grid:rippleDisplace(targetPositions, maxRippleRadius)
                     if not processedTierBubbles[tierIdx] and tierData.triangle then
                         for _, triangleIdx in ipairs(tierData.triangle) do
                             if triangleIdx == idx then
+                                -- Store health info before displacement
+                                local healthData = {}
+                                for _, healthIdx in ipairs(tierData.triangle) do
+                                    healthData[healthIdx] = {
+                                        health = self.cells[healthIdx].health,
+                                        maxHealth = self.cells[healthIdx].maxHealth
+                                    }
+                                end
+                                
                                 -- Displace entire tier 1 bubble
                                 displacedBubbles[#displacedBubbles + 1] = {
                                     type = "tier1",
                                     tierIdx = tierIdx,
                                     tierData = tierData,
-                                    originalPos = {x = tierData.centerX, y = tierData.centerY}
+                                    originalPos = {x = tierData.centerX, y = tierData.centerY},
+                                    healthData = healthData
                                 }
                                 -- Clear all triangle cells
                                 for _, clearIdx in ipairs(tierData.triangle) do
                                     self.cells[clearIdx].occupied = false
                                     self.cells[clearIdx].ballType = nil
                                     self.cells[clearIdx].tier = nil
+                                    self.cells[clearIdx].health = nil
+                                    self.cells[clearIdx].maxHealth = nil
                                 end
                                 self.tierOnePositions[tierIdx] = nil
                                 processedTierBubbles[tierIdx] = true
@@ -1314,6 +1707,8 @@ function Grid:placeTierOne(triangle, ballType, centerX, centerY)
         self.cells[idx].ballType = ballType
         self.cells[idx].occupied = true
         self.cells[idx].tier = "tier1"
+        self.cells[idx].maxHealth = CombatConstants.getBubbleHealth("tier1")
+        self.cells[idx].health = self.cells[idx].maxHealth
     end
     
     -- Use the provided coordinates directly (already rounded from animation)
@@ -1375,6 +1770,16 @@ function Grid:clearCell(idx)
 end
 
 -- Phase 2: Check for magnetic tier 1 combinations
+-- PURPOSE: Detect when two different Tier 1 bubbles are close enough to combine into Tier 2
+-- PARAMS: None
+-- RETURNS: None  
+-- SIDE_EFFECTS: Starts tier2_magnetism animation if valid pair found
+-- AI_NOTE: DECISION TREE for magnetic combinations:
+-- 1. Skip if any animation active (prevents conflicts)
+-- 2. Collect all Tier 1 bubbles with their positions and types
+-- 3. For each pair: Check if different types AND within 60px magnetic range
+-- 4. If valid pair found: Start magnetism animation, remove bubbles, trigger Tier 2 creation
+-- 5. Only process first valid pair found (prevents multiple simultaneous combinations)
 function Grid:checkMagneticCombinations()
     if self.isAnimating then return end
     
@@ -1877,6 +2282,24 @@ end
 -- ============================================================================
 -- ENEMY CREEP SYSTEMS
 -- ============================================================================
+--
+-- PURPOSE: Manage hostile units that spawn and march across the battlefield
+-- BEHAVIOR: 4-shot cycles with staging positions and coordinated marches
+-- CROSS-REFS: Collision detection with troops, rendered in drawCreeps()
+--
+-- CREEP CYCLE STATE MACHINE:
+-- Shot 1: Spawn 5x Basic creeps → Stage at random positions (rows 3,5,7,9,11, col 18)
+-- Shot 2: Spawn 3x Tier 1 creeps → Stage at available positions  
+-- Shot 3: Spawn 2x Tier 2 creeps → Stage at available positions
+-- Shot 4: ALL staged creeps march left off-screen, cycle resets
+--
+-- STAGING BEHAVIOR:
+-- • Creeps spawn off-screen right (staging position + 100px)
+-- • March to staging position and hold
+-- • On Shot 4, march together in formation off-screen left
+--
+-- AI_NOTE: Creep cycles are independent of tier bubble progression.
+-- Collision detection uses sprite size buffers for visual accuracy.
 
 function Grid:handleCreepCycle()
     self.creepCycleCount = self.creepCycleCount + 1
@@ -1910,17 +2333,36 @@ function Grid:spawnCreeps(count, tier, size)
     
     -- Spawn all creeps to the same rally point with random spawn offsets
     for i = 1, count do
+        local creepTier = tier or "basic"
+        local stats = CombatConstants.getUnitStats(creepTier)
+        
+        local spawnX = stagingPos.x + CREEP_SPAWN_OFFSET + math.random(-10, 10)
+        local spawnY = stagingPos.y + math.random(-10, 10)
+        
         self.creeps[#self.creeps + 1] = {
-            x = stagingPos.x + CREEP_SPAWN_OFFSET + math.random(-10, 10),
-            y = stagingPos.y + math.random(-10, 10),
+            x = spawnX,
+            y = spawnY,
             targetX = stagingPos.x,
             targetY = stagingPos.y,
             animating = true,
             staged = false,
             stagingIdx = stagingIdx,
-            tier = tier or "basic",
+            tier = creepTier,
             size = size or 3,
-            marching = false
+            marching = false,
+            
+            -- Stuck detection properties
+            lastX = spawnX,
+            lastY = spawnY,
+            stuckCounter = 0,
+            stuckThreshold = 60,  -- Frames before considering stuck (1 second at 60fps)
+            
+            -- Combat properties
+            hitpoints = stats.HITPOINTS,
+            maxHitpoints = stats.HITPOINTS,
+            damage = stats.DAMAGE,
+            attackTimer = 0,
+            target = nil
         }
     end
 end
@@ -1953,9 +2395,72 @@ function Grid:updateCreeps()
     for i = #self.creeps, 1, -1 do
         local creep = self.creeps[i]
         
+        -- Check if creep is stuck (hasn't moved much recently)
+        local moveDistance = math.sqrt((creep.x - creep.lastX)^2 + (creep.y - creep.lastY)^2)
+        local isStuck = false
+        
+        if moveDistance < 0.5 then  -- Barely moved
+            creep.stuckCounter = creep.stuckCounter + 1
+            if creep.stuckCounter >= creep.stuckThreshold then
+                isStuck = true
+            end
+        else
+            creep.stuckCounter = 0  -- Reset stuck counter if moving normally
+        end
+        
+        -- Update last position for next frame's stuck detection
+        creep.lastX = creep.x
+        creep.lastY = creep.y
+        
         if creep.marching then
-            -- March left until offscreen
-            creep.x = creep.x - CREEP_MOVE_SPEED
+            -- Suicide units keep marching in combat for aggressive charges
+            local stats = CombatConstants.getUnitStats(creep.tier)
+            if not creep.inCombat or stats.ATTACK_TYPE == "suicide_crash" then
+                -- Suicide units steer toward targets, others march in straight line
+                if stats.ATTACK_TYPE == "suicide_crash" and creep.target and self:isTargetValid(creep.target) then
+                    -- Steer toward target with improved bubble avoidance
+                    local dx = creep.target.x - creep.x
+                    local dy = creep.target.y - creep.y
+                    local distance = math.sqrt(dx*dx + dy*dy)
+                    if distance > 0 then
+                        local newX = creep.x + (dx / distance) * CREEP_MOVE_SPEED
+                        local newY = creep.y + (dy / distance) * CREEP_MOVE_SPEED
+                        
+                        -- Check for bubble collision and adjust path (allow through bubbles if stuck or in combat)
+                        local allowThroughBubbles = isStuck or creep.inCombat or (creep.target and self:isTargetValid(creep.target))
+                        local preferDirect = creep.target and self:isTargetValid(creep.target)
+                        if self:checkBubbleCollision(newX, newY, creep.size) then
+                            local avoidX, avoidY = self:findAvoidancePath(creep.x, creep.y, creep.target.x, creep.target.y, creep.size, allowThroughBubbles, preferDirect)
+                            creep.x, creep.y = avoidX, avoidY
+                        else
+                            creep.x, creep.y = newX, newY
+                        end
+                    end
+                else
+                    -- March normally (straight line) with improved bubble avoidance
+                    local newX = creep.x - CREEP_MOVE_SPEED
+                    local newY = creep.y
+                    
+                    -- Check for bubble collision and adjust path (allow through bubbles if stuck or in combat)
+                    local allowThroughBubbles = isStuck or creep.inCombat
+                    if self:checkBubbleCollision(newX, newY, creep.size) then
+                        -- For marching creeps, try to maintain general leftward movement
+                        local avoidX, avoidY = self:findAvoidancePath(creep.x, creep.y, newX, newY, creep.size, allowThroughBubbles)
+                        
+                        -- Prefer paths that still move generally left (unless stuck or in combat)
+                        if avoidX <= creep.x or allowThroughBubbles then
+                            creep.x, creep.y = avoidX, avoidY
+                        else
+                            -- If forced to move right, try alternative paths
+                            local altX, altY = self:findAvoidancePath(creep.x, creep.y, creep.x - CREEP_MOVE_SPEED * 2, creep.y, creep.size, allowThroughBubbles)
+                            creep.x, creep.y = altX, altY
+                        end
+                    else
+                        creep.x = newX
+                    end
+                end
+            end
+            -- Ranged units stop and fight when in combat
             
             -- Remove if offscreen (left edge)
             if creep.x < -20 then
@@ -2006,6 +2511,774 @@ end
 -- Old creep collision function removed - now handled by resolveAllUnitCollisions()
 
 -- ============================================================================
+-- COMBAT SYSTEMS
+-- ============================================================================
+--
+-- PURPOSE: Handle all unit-to-unit combat interactions
+-- BEHAVIOR: Engagement detection, targeting, attacks, damage, projectiles
+-- INTEGRATION: Called from main update loop when units are within combat range
+-- AI_NOTE: Combat phases: Detection → Targeting → Attack → Damage → Victory
+
+-- Main combat update - called from Grid:update()
+function Grid:updateCombat()
+    if self.isAnimating then return end  -- Skip during animations
+    
+    -- Update attack timers for all units
+    self:updateAttackTimers()
+    
+    -- Check for battle engagement
+    self:checkBattleEngagement()
+    
+    -- Update projectiles
+    self:updateProjectiles()
+    
+    -- Process combat if battle is active
+    if self.battleActive then
+        self:processCombat()
+        self:checkBattleEnd()
+    end
+end
+
+-- Update attack cooldown timers for all units
+function Grid:updateAttackTimers()
+    for _, troop in ipairs(self.troops) do
+        if troop.attackTimer > 0 then
+            troop.attackTimer = troop.attackTimer - 1
+        end
+    end
+    
+    for _, creep in ipairs(self.creeps) do
+        if creep.attackTimer > 0 then
+            creep.attackTimer = creep.attackTimer - 1
+        end
+    end
+end
+
+-- Check if any troops and creeps are close enough to engage in battle
+function Grid:checkBattleEngagement()
+    local troopsInRange = {}
+    local creepsInRange = {}
+    
+    -- Find units within combat range of each other (only during march phase)
+    for _, troop in ipairs(self.troops) do
+        if troop.hitpoints > 0 and troop.marching then  -- Only marching, alive troops
+            for _, creep in ipairs(self.creeps) do
+                if creep.hitpoints > 0 and creep.marching then  -- Only marching, alive creeps
+                    local dx = troop.x - creep.x
+                    local dy = troop.y - creep.y
+                    local distance = math.sqrt(dx*dx + dy*dy)
+                    
+                    if distance <= CombatConstants.BATTLE_ENGAGEMENT_RANGE then
+                        troopsInRange[#troopsInRange + 1] = troop
+                        creepsInRange[#creepsInRange + 1] = creep
+                        break  -- This troop is in combat
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Set battle state based on engagement
+    local wasActive = self.battleActive
+    self.battleActive = #troopsInRange > 0 and #creepsInRange > 0
+    
+    -- Mark all units in combat and slow them down
+    for _, troop in ipairs(self.troops) do
+        troop.inCombat = false  -- Reset combat state
+    end
+    for _, creep in ipairs(self.creeps) do
+        creep.inCombat = false  -- Reset combat state
+    end
+    
+    if self.battleActive then
+        for _, troop in ipairs(troopsInRange) do
+            troop.inCombat = true  -- Mark as in combat - this will slow their march
+        end
+        for _, creep in ipairs(creepsInRange) do
+            creep.inCombat = true  -- Mark as in combat - this will slow their march
+        end
+    end
+end
+
+-- Process all combat actions for engaged units
+function Grid:processCombat()
+    -- Update targeting for all units
+    self:updateTargeting()
+    
+    -- Execute attacks for units that are ready
+    local troopsAttacking = 0
+    for _, troop in ipairs(self.troops) do
+        if troop.hitpoints > 0 and troop.target and troop.attackTimer <= 0 then
+            self:executeAttack(troop, "troop")
+            troopsAttacking = troopsAttacking + 1
+        end
+    end
+    
+    local creepsAttacking = 0
+    for _, creep in ipairs(self.creeps) do
+        if creep.hitpoints > 0 and creep.target and creep.attackTimer <= 0 then
+            self:executeAttack(creep, "creep")
+            creepsAttacking = creepsAttacking + 1
+        end
+    end
+    
+    -- Debug output (only occasionally to avoid spam)
+    if math.random(1, 60) == 1 then  -- 1/60 chance per frame
+        local troopsTotal = #self.troops
+        local creepsTotal = #self.creeps
+        local troopsInCombat = 0
+        local creepsInCombat = 0
+        
+        for _, troop in ipairs(self.troops) do
+            if troop.inCombat then troopsInCombat = troopsInCombat + 1 end
+        end
+        for _, creep in ipairs(self.creeps) do
+            if creep.inCombat then creepsInCombat = creepsInCombat + 1 end
+        end
+        
+        print("COMBAT: " .. troopsAttacking .. "/" .. troopsInCombat .. "/" .. troopsTotal .. " troops, " .. 
+              creepsAttacking .. "/" .. creepsInCombat .. "/" .. creepsTotal .. " creeps (attacking/inCombat/total)")
+    end
+end
+
+-- Update targeting for all combat units
+function Grid:updateTargeting()
+    -- Troops target creeps (only during march phase)
+    for _, troop in ipairs(self.troops) do
+        if troop.hitpoints > 0 and troop.marching then
+            troop.target = self:findTarget(troop, self.creeps)
+        end
+    end
+    
+    -- Creeps target both troops and bubbles based on tier rules
+    for _, creep in ipairs(self.creeps) do
+        if creep.hitpoints > 0 and creep.marching then
+            creep.target = self:findCreepTarget(creep)
+        end
+    end
+end
+
+-- Find target for creeps using tier-based targeting rules
+function Grid:findCreepTarget(creep)
+    local troopTarget = self:findTarget(creep, self.troops)
+    local bubbleTarget = self:findBubbleTarget(creep)
+    
+    -- Debug: Print targeting info
+    if creep.tier == "tier2" or creep.tier == "tier3" then
+        local troopStr = troopTarget and ("troop " .. troopTarget.tier) or "no troop"
+        local bubbleStr = bubbleTarget and ("bubble " .. bubbleTarget.tier) or "no bubble"
+        print("DEBUG: " .. creep.tier .. " creep targeting - " .. troopStr .. ", " .. bubbleStr)
+    end
+    
+    -- Tier-based targeting rules
+    if creep.tier == "basic" or creep.tier == "tier1" then
+        -- Basic/Tier 1: Target first thing they can lock onto (troops or bubbles)
+        if troopTarget and bubbleTarget then
+            -- Return whichever is closer
+            local troopDist = math.sqrt((creep.x - troopTarget.x)^2 + (creep.y - troopTarget.y)^2)
+            local bubbleDist = math.sqrt((creep.x - bubbleTarget.x)^2 + (creep.y - bubbleTarget.y)^2)
+            return troopDist <= bubbleDist and troopTarget or bubbleTarget
+        else
+            return troopTarget or bubbleTarget
+        end
+    elseif creep.tier == "tier2" or creep.tier == "tier3" then
+        -- Tier 2/3: Prefer bubbles, but target Tier 2/3 troops if closer
+        if bubbleTarget and troopTarget then
+            local bubbleDist = math.sqrt((creep.x - bubbleTarget.x)^2 + (creep.y - bubbleTarget.y)^2)
+            local troopDist = math.sqrt((creep.x - troopTarget.x)^2 + (creep.y - troopTarget.y)^2)
+            
+            -- Only target troops if they're Tier 2/3 AND closer than bubbles
+            if (troopTarget.tier == "tier2" or troopTarget.tier == "tier3") and troopDist < bubbleDist then
+                if creep.tier == "tier2" or creep.tier == "tier3" then
+                    print("DEBUG: " .. creep.tier .. " chose high-tier troop over bubble")
+                end
+                return troopTarget
+            else
+                if creep.tier == "tier2" or creep.tier == "tier3" then
+                    print("DEBUG: " .. creep.tier .. " chose bubble target")
+                end
+                return bubbleTarget
+            end
+        else
+            local choice = bubbleTarget or troopTarget
+            if choice and (creep.tier == "tier2" or creep.tier == "tier3") then
+                print("DEBUG: " .. creep.tier .. " single target: " .. (choice.type or "troop"))
+            end
+            return choice
+        end
+    end
+    
+    -- Fallback
+    local fallback = troopTarget or bubbleTarget
+    if fallback and (creep.tier == "tier2" or creep.tier == "tier3") then
+        print("DEBUG: " .. creep.tier .. " fallback target: " .. (fallback.type or "troop"))
+    end
+    return fallback
+end
+
+-- Find bubble targets within range for a unit
+function Grid:findBubbleTarget(unit)
+    local bestTarget = nil
+    local bestDistance = math.huge
+    local bestPriority = 0
+    
+    -- Search through all occupied cells for valid bubble targets
+    for idx, cell in pairs(self.cells) do
+        if cell.occupied and not cell.permanent and cell.health then
+            local bubblePos = self.positions[idx]
+            if bubblePos then
+                local dx = unit.x - bubblePos.x
+                local dy = unit.y - bubblePos.y
+                local distance = math.sqrt(dx*dx + dy*dy)
+                
+                -- Get priority for bubble tier (use same priority as units)
+                local priority = CombatConstants.getTargetPriority(cell.tier or "basic")
+                
+                -- Check if this is a better target
+                local shouldTarget = false
+                
+                if priority > bestPriority then
+                    -- Higher priority target
+                    shouldTarget = true
+                elseif priority == bestPriority and distance < bestDistance then
+                    -- Same priority, closer target
+                    shouldTarget = true
+                elseif bestTarget == nil and distance <= CombatConstants.MAX_TARGETING_RANGE then
+                    -- No target yet and within range
+                    shouldTarget = true
+                end
+                
+                if shouldTarget then
+                    bestTarget = {
+                        type = "bubble",
+                        cell = cell,
+                        x = bubblePos.x,
+                        y = bubblePos.y,
+                        tier = cell.tier or "basic"
+                    }
+                    bestDistance = distance
+                    bestPriority = priority
+                end
+            end
+        end
+    end
+    
+    return bestTarget
+end
+
+-- Find the best target for a unit (nearest enemy with tier priority)
+function Grid:findTarget(unit, enemies)
+    local bestTarget = nil
+    local bestDistance = math.huge
+    local bestPriority = 0
+    local unitStats = CombatConstants.getUnitStats(unit.tier)
+    local isSuicideUnit = unitStats.ATTACK_TYPE == "suicide_crash"
+    
+    for _, enemy in ipairs(enemies) do
+        if enemy.hitpoints > 0 and enemy.marching then  -- Only target marching enemies
+            local dx = unit.x - enemy.x
+            local dy = unit.y - enemy.y
+            local distance = math.sqrt(dx*dx + dy*dy)
+            local priority = CombatConstants.getTargetPriority(enemy.tier)
+            
+            -- Priority targeting: prefer higher tier units if within reasonable distance
+            local shouldTarget = false
+            
+            if priority > bestPriority then
+                -- Higher priority target
+                shouldTarget = true
+            elseif priority == bestPriority and distance < bestDistance then
+                -- Same priority, closer target
+                shouldTarget = true
+            elseif bestTarget == nil then
+                -- No target yet - suicide units can target ANY enemy, ranged units limited by range
+                if isSuicideUnit or distance <= CombatConstants.MAX_TARGETING_RANGE then
+                    shouldTarget = true
+                end
+            end
+            
+            if shouldTarget then
+                bestTarget = enemy
+                bestDistance = distance
+                bestPriority = priority
+            end
+        end
+    end
+    
+    return bestTarget
+end
+
+-- Execute an attack based on unit type and attack behavior
+function Grid:executeAttack(attacker, attackerType)
+    -- Check if current target is still valid
+    local targetValid = false
+    if attacker.target then
+        if attacker.target.type == "bubble" then
+            -- Bubble target - check if cell is still occupied and has health
+            targetValid = attacker.target.cell.occupied and attacker.target.cell.health and attacker.target.cell.health > 0
+        else
+            -- Unit target - check hitpoints
+            targetValid = attacker.target.hitpoints and attacker.target.hitpoints > 0
+        end
+    end
+    
+    if not targetValid then
+        -- Find new target if current one is dead/destroyed
+        if attackerType == "troop" then
+            attacker.target = self:findTarget(attacker, self.creeps)
+        else  -- creep
+            attacker.target = self:findCreepTarget(attacker)
+        end
+        if not attacker.target then
+            return  -- No valid targets available
+        end
+    end
+    
+    local stats = CombatConstants.getUnitStats(attacker.tier)
+    local dx = attacker.target.x - attacker.x
+    local dy = attacker.target.y - attacker.y
+    local distance = math.sqrt(dx*dx + dy*dy)
+    
+    if stats.ATTACK_TYPE == "suicide_crash" then
+        -- CHARGE AT THE ENEMY! NO MERCY!
+        local targetSize = attacker.target.size or 10  -- Bubbles default to size 10
+        local attackRange = attacker.size + targetSize + 8
+        
+        -- Debug output for suicide attacks
+        if attacker.target.type == "bubble" then
+            print("DEBUG: " .. attacker.tier .. " suicide at distance " .. math.floor(distance) .. " (need <= " .. attackRange .. ")")
+        end
+        
+        if distance <= attackRange then
+            -- Close enough for suicide attack
+            print("DEBUG: Executing suicide attack on " .. (attacker.target.type or "unit"))
+            self:executeSuicideAttack(attacker, attacker.target)
+        elseif distance <= 40 then
+            -- Within 40px - accelerate for dramatic final approach!
+            self:chargeAtTarget(attacker, attacker.target)
+        end
+        -- Beyond 40px: rely on normal marching speed
+        
+    elseif stats.ATTACK_TYPE == "projectile" then
+        -- Force close-quarters combat - no long-range standoffs!
+        local maxCombatRange = 40  -- Maximum 40px apart for intense battles
+        
+        if distance <= stats.ATTACK_RANGE then
+            -- In range, fire projectile
+            self:fireProjectile(attacker, attacker.target, false)
+            attacker.attackTimer = stats.ATTACK_COOLDOWN
+        end
+        
+        -- Force units to close distance for intense combat
+        if distance > maxCombatRange then
+            -- Too far! Get closer for intense firefight
+            self:moveTowardsTarget(attacker, attacker.target)
+        elseif distance < 25 then
+            -- Too close! Back up slightly for breathing room
+            self:kiteAwayFromTarget(attacker, attacker.target)
+        end
+        -- Sweet spot: 25-40px for intense projectile combat
+        
+    elseif stats.ATTACK_TYPE == "short_projectile" then
+        -- Force close-quarters combat - even shorter range
+        local maxCombatRange = 35  -- Even closer for short-range units
+        
+        if distance <= stats.ATTACK_RANGE then
+            -- In range, fire projectile
+            self:fireProjectile(attacker, attacker.target, false)
+            attacker.attackTimer = stats.ATTACK_COOLDOWN
+        end
+        
+        -- Force units into tight combat range
+        if distance > maxCombatRange then
+            -- Too far! Close the gap aggressively
+            self:moveTowardsTarget(attacker, attacker.target)
+        elseif distance < 20 then
+            -- Too close! Small step back
+            self:kiteAwayFromTarget(attacker, attacker.target)
+        end
+        -- Sweet spot: 20-35px for intense short-range combat
+    end
+end
+
+-- Move unit towards its target
+function Grid:moveTowardsTarget(unit, target)
+    local dx = target.x - unit.x
+    local dy = target.y - unit.y
+    local distance = math.sqrt(dx*dx + dy*dy)
+    
+    if distance > 0 then
+        local moveSpeed = CombatConstants.getUnitStats(unit.tier).MOVE_SPEED or 2
+        unit.x = unit.x + (dx / distance) * moveSpeed
+        unit.y = unit.y + (dy / distance) * moveSpeed
+    end
+end
+
+-- SLOW MENACING ADVANCE - Maximum tension buildup!
+function Grid:chargeAtTarget(unit, target)
+    local dx = target.x - unit.x
+    local dy = target.y - unit.y
+    local distance = math.sqrt(dx*dx + dy*dy)
+    
+    if distance > 0 then
+        local stats = CombatConstants.getUnitStats(unit.tier)
+        local chargeSpeed = stats.MOVE_SPEED * 1.5  -- Slightly faster than normal for final approach
+        unit.x = unit.x + (dx / distance) * chargeSpeed
+        unit.y = unit.y + (dy / distance) * chargeSpeed
+    end
+end
+
+-- Kite away from target - tactical retreat for ranged units
+function Grid:kiteAwayFromTarget(unit, target)
+    local dx = unit.x - target.x  -- Reverse direction to move away
+    local dy = unit.y - target.y
+    local distance = math.sqrt(dx*dx + dy*dy)
+    
+    if distance > 0 then
+        local stats = CombatConstants.getUnitStats(unit.tier)
+        local kiteSpeed = stats.MOVE_SPEED * 0.8  -- Slower retreat for tactical positioning
+        unit.x = unit.x + (dx / distance) * kiteSpeed
+        unit.y = unit.y + (dy / distance) * kiteSpeed
+    end
+end
+
+-- Execute suicide crash attack with blast damage
+function Grid:executeSuicideAttack(attacker, target)
+    local stats = CombatConstants.getUnitStats(attacker.tier)
+    
+    -- Apply damage to primary target
+    print("DEBUG: Suicide attack applying " .. stats.DAMAGE .. " damage to " .. (target.type or "unit"))
+    if target.type == "bubble" then
+        -- For bubble targets, pass the cell directly to applyDamage
+        self:applyDamage(target.cell, stats.DAMAGE)
+    else
+        -- For unit targets, pass the unit directly
+        self:applyDamage(target, stats.DAMAGE)
+    end
+    
+    -- Apply blast damage to nearby enemies (units and bubbles)
+    local enemies = nil
+    -- Determine which enemy list to use based on attacker type
+    local attackerIsCreep = false
+    for _, creep in ipairs(self.creeps) do
+        if creep == attacker then
+            attackerIsCreep = true
+            break
+        end
+    end
+    enemies = attackerIsCreep and self.troops or self.creeps
+    
+    -- Damage nearby enemy units
+    for _, enemy in ipairs(enemies) do
+        if enemy.hitpoints > 0 and enemy ~= target then
+            local dx = enemy.x - attacker.x
+            local dy = enemy.y - attacker.y
+            local distance = math.sqrt(dx*dx + dy*dy)
+            
+            if distance <= stats.BLAST_RADIUS then
+                local blastDamage = CombatConstants.getBlastDamage(attacker.tier, distance, stats.BLAST_RADIUS)
+                if blastDamage > 0 then
+                    self:applyDamage(enemy, blastDamage)
+                end
+            end
+        end
+    end
+    
+    -- Damage nearby bubbles (if attacker is a creep - creeps can damage bubbles)
+    if attackerIsCreep then
+        for idx, cell in pairs(self.cells) do
+            if cell.occupied and cell.health and cell.health > 0 then
+                local bubblePos = self.positions[idx]
+                if bubblePos then
+                    local dx = bubblePos.x - attacker.x
+                    local dy = bubblePos.y - attacker.y
+                    local distance = math.sqrt(dx*dx + dy*dy)
+                    
+                    if distance <= stats.BLAST_RADIUS then
+                        local blastDamage = CombatConstants.getBlastDamage(attacker.tier, distance, stats.BLAST_RADIUS)
+                        if blastDamage > 0 then
+                            self:applyDamage(cell, blastDamage)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Suicide attacker dies
+    attacker.hitpoints = 0
+end
+
+-- Fire a projectile at target
+function Grid:fireProjectile(attacker, target, predictive)
+    local stats = CombatConstants.getUnitStats(attacker.tier)
+    
+    -- Calculate projectile direction
+    local targetX, targetY = target.x, target.y
+    
+    -- TODO: Add predictive targeting for Tier 2 units later
+    -- if predictive then
+    --     -- Calculate where target will be
+    -- end
+    
+    local dx = targetX - attacker.x
+    local dy = targetY - attacker.y
+    local distance = math.sqrt(dx*dx + dy*dy)
+    
+    if distance > 0 then
+        local velocityX = (dx / distance) * stats.PROJECTILE_SPEED
+        local velocityY = (dy / distance) * stats.PROJECTILE_SPEED
+        
+        self.projectiles[#self.projectiles + 1] = {
+            x = attacker.x,
+            y = attacker.y,
+            velocityX = velocityX,
+            velocityY = velocityY,
+            damage = stats.DAMAGE,
+            size = stats.PROJECTILE_SIZE,
+            lifetime = stats.PROJECTILE_LIFETIME,
+            owner = attacker
+        }
+    end
+end
+
+-- Update all active projectiles
+function Grid:updateProjectiles()
+    local activeProjectiles = {}
+    
+    for _, projectile in ipairs(self.projectiles) do
+        -- Move projectile
+        projectile.x = projectile.x + projectile.velocityX
+        projectile.y = projectile.y + projectile.velocityY
+        projectile.lifetime = projectile.lifetime - 1
+        
+        -- Check lifetime
+        if projectile.lifetime <= 0 then
+            goto continue  -- Projectile expired
+        end
+        
+        -- Check collision with enemies
+        local enemies = nil
+        if projectile.owner and projectile.owner.tier then
+            -- Determine which list to check based on owner type
+            local ownerFound = false
+            for _, troop in ipairs(self.troops) do
+                if troop == projectile.owner then
+                    enemies = self.creeps  -- Troop projectile hits creeps
+                    ownerFound = true
+                    break
+                end
+            end
+            if not ownerFound then
+                enemies = self.troops  -- Creep projectile hits troops
+            end
+        end
+        
+        if enemies then
+            for _, enemy in ipairs(enemies) do
+                if enemy.hitpoints > 0 then
+                    local dx = projectile.x - enemy.x
+                    local dy = projectile.y - enemy.y
+                    local distance = math.sqrt(dx*dx + dy*dy)
+                    
+                    if distance <= projectile.size + enemy.size + 1 then
+                        -- Hit!
+                        self:applyDamage(enemy, projectile.damage)
+                        goto continue  -- Projectile consumed
+                    end
+                end
+            end
+        end
+        
+        -- Check collision with bubbles (only for creep projectiles)
+        if not ownerFound then  -- This means owner is a creep
+            for idx, cell in pairs(self.cells) do
+                if cell.occupied and cell.health and cell.health > 0 then
+                    local bubblePos = self.positions[idx]
+                    if bubblePos then
+                        local dx = projectile.x - bubblePos.x
+                        local dy = projectile.y - bubblePos.y
+                        local distance = math.sqrt(dx*dx + dy*dy)
+                        
+                        if distance <= projectile.size + 10 + 1 then  -- 10 = bubble size
+                            -- Hit bubble!
+                            print("DEBUG: Projectile hit " .. (cell.tier or "basic") .. " bubble for " .. projectile.damage .. " damage")
+                            self:applyDamage(cell, projectile.damage)
+                            goto continue  -- Projectile consumed
+                        end
+                    end
+                end
+            end
+        end
+        
+        -- Projectile survived, keep it
+        activeProjectiles[#activeProjectiles + 1] = projectile
+        ::continue::
+    end
+    
+    self.projectiles = activeProjectiles
+end
+
+-- Apply damage to a unit
+function Grid:applyDamage(target, damage)
+    -- Handle both unit and bubble targets
+    if target.hitpoints then
+        -- Unit target
+        target.hitpoints = target.hitpoints - damage
+        if target.hitpoints < 0 then
+            target.hitpoints = 0
+        end
+    elseif target.health then
+        -- Bubble target (cell reference)
+        local oldHealth = target.health
+        target.health = target.health - damage
+        print("DEBUG: Bubble " .. (target.tier or "basic") .. " took " .. damage .. " damage: " .. oldHealth .. " -> " .. target.health)
+        if target.health <= 0 then
+            print("DEBUG: Bubble " .. (target.tier or "basic") .. " destroyed!")
+            -- Bubble destroyed - clear the cell
+            self:destroyBubble(target)
+        end
+    end
+end
+
+-- Destroy a bubble and handle tier bubble cleanup
+function Grid:destroyBubble(cell)
+    if not cell or not cell.occupied then return end
+    
+    -- Handle tier bubble destruction
+    if cell.tier == "tier1" then
+        -- Find and remove from tierOnePositions
+        for tierIdx, tierData in pairs(self.tierOnePositions) do
+            for _, triangleIdx in ipairs(tierData.triangle or {}) do
+                if self.cells[triangleIdx] == cell then
+                    -- Clear entire tier 1 bubble
+                    for _, clearIdx in ipairs(tierData.triangle) do
+                        self.cells[clearIdx].occupied = false
+                        self.cells[clearIdx].ballType = nil
+                        self.cells[clearIdx].tier = nil
+                        self.cells[clearIdx].health = nil
+                        self.cells[clearIdx].maxHealth = nil
+                    end
+                    self.tierOnePositions[tierIdx] = nil
+                    return
+                end
+            end
+        end
+    elseif cell.tier == "tier2" then
+        -- Find and remove from tierTwoPositions
+        for tierIdx, tierData in pairs(self.tierTwoPositions) do
+            for _, patternIdx in ipairs(tierData.pattern or {}) do
+                if self.cells[patternIdx] == cell then
+                    -- Clear entire tier 2 bubble
+                    for _, clearIdx in ipairs(tierData.pattern) do
+                        self.cells[clearIdx].occupied = false
+                        self.cells[clearIdx].ballType = nil
+                        self.cells[clearIdx].tier = nil
+                        self.cells[clearIdx].health = nil
+                        self.cells[clearIdx].maxHealth = nil
+                    end
+                    self.tierTwoPositions[tierIdx] = nil
+                    return
+                end
+            end
+        end
+    elseif cell.tier == "tier3" then
+        -- Find and remove from tierThreePositions
+        for tierIdx, tierData in pairs(self.tierThreePositions) do
+            for _, patternIdx in ipairs(tierData.pattern or {}) do
+                if self.cells[patternIdx] == cell then
+                    -- Clear entire tier 3 bubble
+                    for _, clearIdx in ipairs(tierData.pattern) do
+                        self.cells[clearIdx].occupied = false
+                        self.cells[clearIdx].ballType = nil
+                        self.cells[clearIdx].tier = nil
+                        self.cells[clearIdx].health = nil
+                        self.cells[clearIdx].maxHealth = nil
+                    end
+                    self.tierThreePositions[tierIdx] = nil
+                    return
+                end
+            end
+        end
+    else
+        -- Basic bubble - just clear the cell
+        cell.occupied = false
+        cell.ballType = nil
+        cell.tier = nil
+        cell.health = nil
+        cell.maxHealth = nil
+    end
+end
+
+-- Check if battle has ended (one side eliminated)
+function Grid:checkBattleEnd()
+    local aliveTroops = 0
+    local aliveCreeps = 0
+    
+    -- Count living units
+    for _, troop in ipairs(self.troops) do
+        if troop.hitpoints > 0 then
+            aliveTroops = aliveTroops + 1
+        end
+    end
+    
+    for _, creep in ipairs(self.creeps) do
+        if creep.hitpoints > 0 then
+            aliveCreeps = aliveCreeps + 1
+        end
+    end
+    
+    -- Check for victory conditions - FIGHT TO THE BITTER END!
+    if aliveTroops == 0 or aliveCreeps == 0 then
+        self.battleActive = false
+        
+        -- Winning side continues march off-screen
+        if aliveTroops > 0 then
+            -- Troops won, continue march right
+            for _, troop in ipairs(self.troops) do
+                if troop.hitpoints > 0 then
+                    troop.inCombat = false  -- Stop combat mode
+                    troop.marching = true
+                    troop.targetX = 500  -- March off-screen right
+                end
+            end
+            print("🏆 TROOPS VICTORIOUS! " .. aliveTroops .. " survivors march on!")
+        elseif aliveCreeps > 0 then
+            -- Creeps won, continue march left  
+            for _, creep in ipairs(self.creeps) do
+                if creep.hitpoints > 0 then
+                    creep.inCombat = false  -- Stop combat mode
+                    creep.marching = true
+                    creep.targetX = -100  -- March off-screen left
+                end
+            end
+            print("💀 CREEPS VICTORIOUS! " .. aliveCreeps .. " survivors march on!")
+        end
+    end
+end
+
+-- Clean up dead units from arrays
+function Grid:cleanupDeadUnits()
+    -- Remove dead troops
+    local aliveTroops = {}
+    for _, troop in ipairs(self.troops) do
+        if troop.hitpoints > 0 then
+            aliveTroops[#aliveTroops + 1] = troop
+        end
+    end
+    self.troops = aliveTroops
+    
+    -- Remove dead creeps  
+    local aliveCreeps = {}
+    for _, creep in ipairs(self.creeps) do
+        if creep.hitpoints > 0 then
+            aliveCreeps[#aliveCreeps + 1] = creep
+        end
+    end
+    self.creeps = aliveCreeps
+end
+
+-- ============================================================================
 -- RENDERING SYSTEMS
 -- ============================================================================
 
@@ -2016,6 +3289,7 @@ function Grid:draw()
     self:drawBalls()
     self:drawCreeps()
     self:drawTroops()
+    self:drawProjectiles()  -- Draw combat projectiles
     self:drawAnimations()
     self:drawUI()
     self:drawPopup()
@@ -2185,11 +3459,43 @@ function Grid:drawCreeps()
         end
         
         sprite:draw(creep.x - offset, creep.y - offset)
+        
+        -- Draw health bar if unit is damaged (debug mode only)
+        if self.showDebug and creep.hitpoints < creep.maxHitpoints then
+            self:drawHealthBar(creep.x, creep.y - offset - 8, creep.hitpoints, creep.maxHitpoints, 12)
+        end
     end
 end
 -- ============================================================================
 -- ALLIED TROOP SYSTEMS  
 -- ============================================================================
+--
+-- PURPOSE: Manage friendly units spawned from bubbles that rally and march
+-- BEHAVIOR: Spawn from tier bubbles → rally to specific points → march in formation
+-- CROSS-REFS: Spawned from tier progression, collision with creeps, rendered in drawTroops()
+--
+-- TROOP SPAWNING RULES:
+-- • Every shot: All tier bubbles (T1/T2/T3) spawn corresponding troops
+-- • Every shot: 10% chance per basic bubble to spawn basic troop
+-- • Troops inherit rally point from their spawning bubble or nearest available
+--
+-- RALLY POINT ASSIGNMENTS:
+-- ┌─────────────┬─────────────────────────────────────────────────────────┐
+-- │ Troop Type  │ Rally Point Location                                    │
+-- ├─────────────┼─────────────────────────────────────────────────────────┤
+-- │ Basic       │ Nearest available (bubble-specific or base cutout)     │
+-- │ Tier 1      │ Bubble center, offset up 1/3 from center              │
+-- │ Tier 2      │ Bubble center, offset up 1/3 from center              │
+-- │ Tier 3      │ Exact bubble center (stays even after despawn)        │
+-- └─────────────┴─────────────────────────────────────────────────────────┘
+--
+-- MOVEMENT STATES:
+-- 1. Approaching: Moving from spawn → rally point
+-- 2. Rallied: Clustered at rally point, gentle shuffling
+-- 3. Marching: Moving right off-screen in formation (Shot 4 trigger)
+--
+-- AI_NOTE: Troop movement uses gentle physics with collision avoidance.
+-- When bubbles merge, troops transfer to new bubble's rally point automatically.
 
 -- Get a random rally point position
 function Grid:getRandomRallyPoint()
@@ -2197,18 +3503,108 @@ function Grid:getRandomRallyPoint()
     return self.positions[rallyIdx]
 end
 
+-- Calculate bubble-specific rally point based on tier and bubble position
+function Grid:getBubbleRallyPoint(bubbleX, bubbleY, tier)
+    local rallyX = bubbleX  -- Midpoint left/right
+    local rallyY
+    
+    if tier == "tier1" then
+        -- Top 1/3 of the bubble (assuming 20px height)
+        rallyY = bubbleY - 7  -- 1/3 up from center
+    elseif tier == "tier2" then
+        -- Top 1/3 of the bubble (assuming 20px height)  
+        rallyY = bubbleY - 7   -- 1/3 up from center
+    else
+        -- Default behavior for other tiers
+        return self:getRandomRallyPoint()
+    end
+    
+    return {x = rallyX, y = rallyY}
+end
+
+-- Transfer troops from merged bubbles to new bubble's rally point
+-- PURPOSE: When bubbles merge, move their troops to the new bubble's rally point
+-- PARAMS: oldRallyPositions (array of {x,y}), newRallyPos ({x,y})
+-- RETURNS: None
+-- SIDE_EFFECTS: Updates troop rallyPoint, targetX/Y, sets rallied=false to trigger movement
+-- AI_NOTE: TROOP TRANSFER LOGIC:
+-- 1. Only affect troops that aren't marching (preserve march state)
+-- 2. Check each troop's current rally point against old rally positions
+-- 3. If match found: Update rally point, set new target, mark as not-rallied
+-- 4. Troops will automatically path to new position using existing movement logic
+-- This ensures smooth transitions when Tier 1+2 → Tier 2+3 merges occur.
+function Grid:transferTroopsToNewRally(oldRallyPositions, newRallyPos)
+    if not newRallyPos then return end
+    
+    for _, troop in ipairs(self.troops) do
+        if troop.rallyPoint and not troop.marching then
+            -- Check if this troop was assigned to any of the old rally points
+            for _, oldRally in ipairs(oldRallyPositions) do
+                if troop.rallyPoint.x == oldRally.x and troop.rallyPoint.y == oldRally.y then
+                    -- Reassign to new rally point and make them move there
+                    troop.rallyPoint = newRallyPos
+                    troop.targetX = newRallyPos.x
+                    troop.targetY = newRallyPos.y
+                    troop.rallied = false  -- Make them move to new position
+                    break
+                end
+            end
+        end
+    end
+end
+
+-- Find nearest rally point (bubble-specific or base rally points)
+function Grid:findNearestRallyPoint(spawnX, spawnY)
+    local nearestRally = nil
+    local nearestDistance = math.huge
+    
+    -- Check all tier 1 bubble rally points
+    for idx, tierData in pairs(self.tierOnePositions) do
+        local rallyPos = self:getBubbleRallyPoint(tierData.centerX, tierData.centerY, "tier1")
+        local distance = math.sqrt((spawnX - rallyPos.x)^2 + (spawnY - rallyPos.y)^2)
+        if distance < nearestDistance then
+            nearestDistance = distance
+            nearestRally = rallyPos
+        end
+    end
+    
+    -- Check all tier 2 bubble rally points
+    for idx, tierData in pairs(self.tierTwoPositions) do
+        local rallyPos = self:getBubbleRallyPoint(tierData.centerX, tierData.centerY, "tier2")
+        local distance = math.sqrt((spawnX - rallyPos.x)^2 + (spawnY - rallyPos.y)^2)
+        if distance < nearestDistance then
+            nearestDistance = distance
+            nearestRally = rallyPos
+        end
+    end
+    
+    -- Check base rally points (left edge cutout)
+    for _, rallyIdx in ipairs(TROOP_RALLY_POINTS) do
+        local rallyPos = self.positions[rallyIdx]
+        if rallyPos then
+            local distance = math.sqrt((spawnX - rallyPos.x)^2 + (spawnY - rallyPos.y)^2)
+            if distance < nearestDistance then
+                nearestDistance = distance
+                nearestRally = rallyPos
+            end
+        end
+    end
+    
+    return nearestRally or self:getRandomRallyPoint()
+end
+
 -- Spawn troops from all tier bubbles after shot landing
 function Grid:spawnTroopsFromBubbles()
     
     -- Spawn from Tier 1 bubbles
     for idx, tierData in pairs(self.tierOnePositions) do
-        local rallyPos = self:getRandomRallyPoint()
+        local rallyPos = self:getBubbleRallyPoint(tierData.centerX, tierData.centerY, "tier1")
         self:spawnTroop(tierData.centerX, tierData.centerY, "tier1", TROOP_SIZE_TIER1, rallyPos)
     end
     
     -- Spawn from Tier 2 bubbles  
     for idx, tierData in pairs(self.tierTwoPositions) do
-        local rallyPos = self:getRandomRallyPoint()
+        local rallyPos = self:getBubbleRallyPoint(tierData.centerX, tierData.centerY, "tier2")
         self:spawnTroop(tierData.centerX, tierData.centerY, "tier2", TROOP_SIZE_TIER2, rallyPos)
     end
     
@@ -2218,23 +3614,19 @@ function Grid:spawnTroopsFromBubbles()
         self:spawnTroop(tierData.centerX, tierData.centerY, "tier3", TROOP_SIZE_TIER3, rallyPos)
     end
 end
--- Spawn basic troops from 1/3 of basic bubbles (shots 2, 6, 10, etc.)
+-- Spawn basic troops (each basic bubble has 10% chance)
 function Grid:spawnBasicTroops()
-    local basicBubbles = {}
     for idx, cell in pairs(self.cells) do
         if cell.occupied and cell.tier == "basic" then
-            basicBubbles[#basicBubbles + 1] = idx
-        end
-    end
-    
-    -- Spawn from 1/3 of basic bubbles
-    local spawnCount = math.max(1, math.floor(#basicBubbles / 3))
-    for i = 1, spawnCount do
-        local idx = basicBubbles[math.random(#basicBubbles)]
-        local pos = self.positions[idx]
-        if pos then
-            local rallyPos = self:getRandomRallyPoint()
-            self:spawnTroop(pos.x, pos.y, "basic", TROOP_SIZE_BASIC, rallyPos)
+            -- 10% chance for each basic bubble to spawn a troop
+            if math.random() < 0.1 then
+                local pos = self.positions[idx]
+                if pos then
+                    -- Find nearest rally point (bubble or base)
+                    local rallyPos = self:findNearestRallyPoint(pos.x, pos.y)
+                    self:spawnTroop(pos.x, pos.y, "basic", TROOP_SIZE_BASIC, rallyPos)
+                end
+            end
         end
     end
 end
@@ -2245,16 +3637,44 @@ function Grid:spawnTroop(spawnX, spawnY, tier, size, rallyPos)
     -- Check if we're in a march state (Turn 4 or any troops marching)
     local shouldMarch = self:shouldNewTroopsMarch()
     
+    local stats = CombatConstants.getUnitStats(tier)
+    
+    -- Check if spawning inside a bubble and need escape path
+    local finalTargetX, finalTargetY = rallyPos.x, rallyPos.y
+    local needsEscape = self:checkBubbleCollision(spawnX, spawnY, size)
+    
+    if needsEscape then
+        -- Find nearest open space to escape to first
+        local escapePos = self:findNearestOpenSpace(spawnX, spawnY, size)
+        finalTargetX, finalTargetY = escapePos.x, escapePos.y
+    end
+    
     self.troops[#self.troops + 1] = {
         x = spawnX,
         y = spawnY,
-        targetX = rallyPos.x,
-        targetY = rallyPos.y,
+        targetX = finalTargetX,
+        targetY = finalTargetY,
         tier = tier,
         size = size,
+        needsEscape = needsEscape,  -- Flag to track escape state
+        originalRallyX = rallyPos.x,  -- Store original rally point
+        originalRallyY = rallyPos.y,
         marching = shouldMarch,
         rallied = false,
-        rallyPoint = rallyPos  -- Store assigned rally point
+        rallyPoint = rallyPos,  -- Store assigned rally point
+        
+        -- Stuck detection properties
+        lastX = spawnX,
+        lastY = spawnY,
+        stuckCounter = 0,
+        stuckThreshold = 60,  -- Frames before considering stuck (1 second at 60fps)
+        
+        -- Combat properties
+        hitpoints = stats.HITPOINTS,
+        maxHitpoints = stats.HITPOINTS,
+        damage = stats.DAMAGE,
+        attackTimer = 0,
+        target = nil
     }
 end
 -- Determine if newly spawned troops should march immediately
@@ -2268,9 +3688,72 @@ function Grid:updateTroops()
     for i = #self.troops, 1, -1 do
         local troop = self.troops[i]
         
+        -- Check if troop is stuck (hasn't moved much recently)
+        local moveDistance = math.sqrt((troop.x - troop.lastX)^2 + (troop.y - troop.lastY)^2)
+        local isStuck = false
+        
+        if moveDistance < 0.5 then  -- Barely moved
+            troop.stuckCounter = troop.stuckCounter + 1
+            if troop.stuckCounter >= troop.stuckThreshold then
+                isStuck = true
+            end
+        else
+            troop.stuckCounter = 0  -- Reset stuck counter if moving normally
+        end
+        
+        -- Update last position for next frame's stuck detection
+        troop.lastX = troop.x
+        troop.lastY = troop.y
+        
         if troop.marching then
-            -- March right until offscreen
-            troop.x = troop.x + TROOP_MARCH_SPEED
+            -- Suicide units keep marching in combat for aggressive charges
+            local stats = CombatConstants.getUnitStats(troop.tier)
+            if not troop.inCombat or stats.ATTACK_TYPE == "suicide_crash" then
+                -- Suicide units steer toward targets, others march in straight line
+                if stats.ATTACK_TYPE == "suicide_crash" and troop.target and self:isTargetValid(troop.target) then
+                    -- Steer toward target with bubble avoidance
+                    local dx = troop.target.x - troop.x
+                    local dy = troop.target.y - troop.y
+                    local distance = math.sqrt(dx*dx + dy*dy)
+                    if distance > 0 then
+                        local newX = troop.x + (dx / distance) * TROOP_MARCH_SPEED
+                        local newY = troop.y + (dy / distance) * TROOP_MARCH_SPEED
+                        
+                        -- Check for bubble collision and adjust path (allow through bubbles if stuck or in combat)
+                        local allowThroughBubbles = isStuck or troop.inCombat or (troop.target and self:isTargetValid(troop.target))
+                        local preferDirect = troop.target and self:isTargetValid(troop.target)
+                        if self:checkBubbleCollision(newX, newY, troop.size) then
+                            local avoidX, avoidY = self:findAvoidancePath(troop.x, troop.y, troop.target.x, troop.target.y, troop.size, allowThroughBubbles, preferDirect)
+                            troop.x, troop.y = avoidX, avoidY
+                        else
+                            troop.x, troop.y = newX, newY
+                        end
+                    end
+                else
+                    -- March normally (straight line) with bubble avoidance
+                    local newX = troop.x + TROOP_MARCH_SPEED
+                    local newY = troop.y
+                    
+                    -- Check for bubble collision and adjust path (allow through bubbles if stuck or in combat)
+                    local allowThroughBubbles = isStuck or troop.inCombat
+                    if self:checkBubbleCollision(newX, newY, troop.size) then
+                        -- For marching troops, try to maintain general rightward movement
+                        local avoidX, avoidY = self:findAvoidancePath(troop.x, troop.y, newX, newY, troop.size, allowThroughBubbles)
+                        
+                        -- Prefer paths that still move generally right (unless stuck or in combat)
+                        if avoidX >= troop.x or allowThroughBubbles then
+                            troop.x, troop.y = avoidX, avoidY
+                        else
+                            -- If forced to move left, try alternative paths
+                            local altX, altY = self:findAvoidancePath(troop.x, troop.y, troop.x + TROOP_MARCH_SPEED * 2, troop.y, troop.size, allowThroughBubbles)
+                            troop.x, troop.y = altX, altY
+                        end
+                    else
+                        troop.x = newX
+                    end
+                end
+            end
+            -- Ranged units stop and fight when in combat
             
             -- Fan out vertically during first 200px of march
             if not troop.fanOutStartX then
@@ -2298,24 +3781,60 @@ function Grid:updateTroops()
                 table.remove(self.troops, i)
             end
         elseif not troop.rallied then
-            -- Find target: use troop's assigned rally point  
-            local clusterCenter = self:findTroopClusterCenter(troop)
-            local targetX = clusterCenter.x
-            local targetY = clusterCenter.y
+            -- Handle escape from bubbles first, then rally
+            local targetX, targetY
+            
+            if troop.needsEscape then
+                -- Check if we've escaped from the bubble
+                if not self:checkBubbleCollision(troop.x, troop.y, troop.size) then
+                    -- Escaped! Now head to original rally point
+                    troop.needsEscape = false
+                    troop.targetX = troop.originalRallyX
+                    troop.targetY = troop.originalRallyY
+                end
+                -- Use current escape target
+                targetX, targetY = troop.targetX, troop.targetY
+            else
+                -- Normal rally behavior
+                local clusterCenter = self:findTroopClusterCenter(troop)
+                targetX = clusterCenter.x
+                targetY = clusterCenter.y
+            end
             
             -- Move toward cluster center
             local dx = targetX - troop.x
             local dy = targetY - troop.y
             local dist = math.sqrt(dx*dx + dy*dy)
             
-            if dist <= TROOP_MOVE_SPEED * 4 then  -- Even larger threshold for looser rally clusters
-                -- Reached cluster area, join and trigger shuffle
+            -- More flexible rally threshold - accept rallying if close OR if path is blocked by bubbles
+            local canRally = dist <= TROOP_MOVE_SPEED * 4
+            local pathBlocked = self:checkBubbleCollision(troop.x + (dx/dist) * TROOP_MOVE_SPEED, troop.y + (dy/dist) * TROOP_MOVE_SPEED, troop.size)
+            
+            if canRally or (pathBlocked and dist <= TROOP_MOVE_SPEED * 8) or isStuck then
+                -- Reached cluster area, blocked path, or stuck - join and trigger shuffle
                 troop.rallied = true
                 self:shuffleTroops(troop)
             else
-                -- Move toward cluster center, but clamp to valid area
+                -- Move toward cluster center, avoiding bubble collisions
                 local newX = troop.x + (dx/dist) * TROOP_MOVE_SPEED
                 local newY = troop.y + (dy/dist) * TROOP_MOVE_SPEED
+                
+                -- Check for bubble collision and adjust path if needed (allow through bubbles if stuck, in combat, or has target)
+                local allowThroughBubbles = isStuck or troop.inCombat or (troop.target and self:isTargetValid(troop.target))
+                if self:checkBubbleCollision(newX, newY, troop.size) then
+                    -- Try moving around the bubble (allow through if needed for combat)
+                    local avoidanceX, avoidanceY = self:findAvoidancePath(troop.x, troop.y, targetX, targetY, troop.size, allowThroughBubbles)
+                    newX, newY = avoidanceX, avoidanceY
+                    
+                    -- If still can't move much and not in combat situation, accept current position as "close enough"
+                    local moveDistance = math.sqrt((newX - troop.x)^2 + (newY - troop.y)^2)
+                    if moveDistance < TROOP_MOVE_SPEED * 0.3 and dist <= TROOP_MOVE_SPEED * 12 and not allowThroughBubbles then
+                        troop.rallied = true
+                        self:shuffleTroops(troop)
+                        newX, newY = troop.x, troop.y  -- Don't move
+                    end
+                end
+                
                 local clampedPos = self:clampToValidArea(newX, newY, troop.size)
                 troop.x = clampedPos.x
                 troop.y = clampedPos.y
@@ -2681,8 +4200,53 @@ function Grid:drawTroops()
         end
         
         sprite:draw(troop.x - offset, troop.y - offset)
+        
+        -- Draw health bar if unit is damaged (debug mode only)
+        if self.showDebug and troop.hitpoints < troop.maxHitpoints then
+            self:drawHealthBar(troop.x, troop.y - offset - 8, troop.hitpoints, troop.maxHitpoints, 12)
+        end
     end
 end
+
+-- Draw all active projectiles
+function Grid:drawProjectiles()
+    gfx.setColor(gfx.kColorBlack)
+    
+    for _, projectile in ipairs(self.projectiles) do
+        if projectile.size == 2 then
+            -- 2px square projectile (Tier 2)
+            gfx.fillRect(
+                math.floor(projectile.x - 1), 
+                math.floor(projectile.y - 1), 
+                2, 2
+            )
+        elseif projectile.size == 4 then
+            -- 4x4 square projectile (Tier 3)
+            gfx.fillRect(
+                math.floor(projectile.x - 2), 
+                math.floor(projectile.y - 2), 
+                4, 4
+            )
+        end
+    end
+end
+
+-- Draw a health bar above a unit
+function Grid:drawHealthBar(x, y, currentHealth, maxHealth, width)
+    if currentHealth <= 0 or currentHealth >= maxHealth then return end
+    
+    local healthRatio = currentHealth / maxHealth
+    local healthWidth = math.floor(width * healthRatio)
+    
+    -- Background (black)
+    gfx.setColor(gfx.kColorBlack)
+    gfx.fillRect(x - width/2, y, width, 2)
+    
+    -- Health bar (white)  
+    gfx.setColor(gfx.kColorWhite)
+    gfx.fillRect(x - width/2, y, healthWidth, 2)
+end
+
 -- Handle troop shot counting and cycle management
 function Grid:handleTroopShotCounting()
     self.troopShotCounter = self.troopShotCounter + 1
@@ -2723,13 +4287,28 @@ function Grid:spawnTroopsForShot()
     -- Always spawn from existing tier bubbles
     self:spawnTroopsFromBubbles()
     
-    -- Shots 2, 6, 10, etc.: also spawn from 1/3 of basic bubbles
-    if self.troopShotCounter == 2 or (self.troopShotCounter > 2 and (self.troopShotCounter - 2) % 4 == 0) then
-        self:spawnBasicTroops()
-    end
+    -- Spawn basic troops every turn (1/5 of basic bubbles)
+    self:spawnBasicTroops()
 end
 
 -- Draw active animations
+-- PURPOSE: Render all active animations with proper visual effects
+-- PARAMS: None
+-- RETURNS: None
+-- SIDE_EFFECTS: Draws sprites to screen using animation interpolation
+-- AI_NOTE: ANIMATION RENDERING PIPELINE:
+-- 1. Iterate through all active animations in self.animations
+-- 2. Calculate progress (frame / total_frames) for interpolation
+-- 3. For each animation type, render appropriate visual effects:
+--    • merge: Balls converging to center point
+--    • tier1_placement: Tier 1 bubble moving to triangle center
+--    • tier2_magnetism: Two Tier 1 bubbles moving to midpoint
+--    • tier2_snap: Grid snapping effect for Tier 2 placement
+--    • tier3_magnetism: Tier 1 + Tier 2 moving to midpoint
+--    • tier3_snap: Grid snapping effect for Tier 3 placement
+--    • tier3_flash: Flashing effect (hold → flash1 → off1 → flash2 → off2 → flash3 → off3)
+-- 4. Use currentX/Y interpolation for smooth movement animations
+-- 5. Respect flash states for tier3_flash (only draw during flash states, not off states)
 function Grid:drawAnimations()
     for _, anim in ipairs(self.animations) do
         if anim.type == "merge" then
@@ -2766,7 +4345,7 @@ function Grid:drawAnimations()
             self.bubbleSprites.tier3[anim.sprite]:draw(currentX - 42, currentY - 42)
         elseif anim.type == "tier3_flash" then
             -- Only draw during hold and flash states, not during off states
-            if anim.flashState == "hold" or anim.flashState == "flash1" or anim.flashState == "flash2" then
+            if anim.flashState == "hold" or anim.flashState == "flash1" or anim.flashState == "flash2" or anim.flashState == "flash3" then
                 self.bubbleSprites.tier3[anim.sprite]:draw(anim.centerX - 42, anim.centerY - 42)
             end
         end
@@ -2775,9 +4354,9 @@ end
 
 -- Draw UI elements
 function Grid:drawUI()
-    -- On-deck ball (always show with infinite shots)
+    -- On-deck ball (only show when loaded after delay)
     local onDeckPos = self.positions[(15 - 1) * 20 + 17]
-    if onDeckPos then
+    if onDeckPos and self.onDeckBallType then
         self.bubbleSprites.basic[self.onDeckBallType]:draw(onDeckPos.x - 10, onDeckPos.y - 10)
     end
 end
