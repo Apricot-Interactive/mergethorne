@@ -209,8 +209,12 @@ end
 function Grid:setupGameState()
     self.angle = 0
     self.ball = nil
-    self.shooterBallType = math.random(1, 5)
-    self.onDeckBallType = math.random(1, 5)
+    -- Simple ammo system: array of balls
+    self.ammo = {}
+    for i = 1, 15 do
+        self.ammo[i] = math.random(1, 5)
+    end
+    self.currentShotIndex = 1  -- Which shot we're on (1-15)
     self.gameState = "playing"
     self.showDebug = false
     
@@ -233,7 +237,10 @@ function Grid:setupGameState()
     -- Creep system
     self.creeps = {}  -- {x, y, targetX, targetY, animating, staged, tier, size, marching}
     self.stagingOccupied = {}  -- Track which staging positions are occupied
-    self.creepCycleCount = 0  -- Track shots for creep spawn cycles (1-5)
+    -- Creep spawning is now random based on dice rolls per shot
+    self.finalAttackTriggered = false  -- Track if final attack sequence has begun
+    self.finalAttackDelay = nil  -- Countdown timer before final march
+    self.linesCrossingTimer = 0  -- Timer for dashed line crossing (every 2 frames)
     
     -- Troop system
     self.troops = {}  -- {x, y, targetX, targetY, tier, size, marching, rallied}
@@ -248,32 +255,88 @@ function Grid:setupGameState()
     self:setupStartingBalls()
 end
 
--- Add initial ball layout
+-- Initialize starting grid with pre-placed bubbles
 function Grid:setupStartingBalls()
-    local startingBalls = {
-        -- Basic A (type 1)
-        {1, 1, 1}, {1, 2, 1}, {2, 1, 1}, {2, 2, 1},
-        {6, 3, 1}, {7, 4, 1}, {8, 3, 1},
-        {12, 1, 1}, {12, 2, 1}, {13, 1, 1}, {13, 2, 1},
-        -- Basic B (type 2)
-        {3, 1, 2}, {3, 2, 2}, {4, 1, 2},
-        -- Basic C (type 3)
-        {4, 2, 3}, {5, 3, 3},
-        -- Basic D (type 4)
-        {9, 3, 4}, {10, 2, 4},
-        -- Basic E (type 5)
-        {10, 1, 5}, {11, 1, 5}, {11, 2, 5}
+    -- Randomly assign bubble types to letters A, B, C, D, E (types 1-5)
+    local letterTypes = {}
+    local availableTypes = {1, 2, 3, 4, 5}
+    
+    -- Shuffle and assign types to letters
+    for i = #availableTypes, 2, -1 do
+        local j = math.random(i)
+        availableTypes[i], availableTypes[j] = availableTypes[j], availableTypes[i]
+    end
+    
+    letterTypes.A = availableTypes[1]
+    letterTypes.B = availableTypes[2]
+    letterTypes.C = availableTypes[3]
+    letterTypes.D = availableTypes[4]
+    letterTypes.E = availableTypes[5]
+    
+    -- Define pre-placed cell positions with their letter assignments
+    local prePlacedCells = {
+        -- A cells: 1,1 1,2 2,1 2,2
+        {{1,1}, "A"}, {{1,2}, "A"}, {{2,1}, "A"}, {{2,2}, "A"},
+        -- B cells: 3,1 3,2 3,3 4,1 4,2  
+        {{3,1}, "B"}, {{3,2}, "B"}, {{3,3}, "B"}, {{4,1}, "B"}, {{4,2}, "B"},
+        -- E cells: 13,1 13,2 12,1 12,2
+        {{13,1}, "E"}, {{13,2}, "E"}, {{12,1}, "E"}, {{12,2}, "E"},
+        -- D cells: 11,1 11,2 11,3 10,1 10,2
+        {{11,1}, "D"}, {{11,2}, "D"}, {{11,3}, "D"}, {{10,1}, "D"}, {{10,2}, "D"},
+        -- E cells: 4,3 5,3 5,4 6,3
+        {{4,3}, "E"}, {{5,3}, "E"}, {{5,4}, "E"}, {{6,3}, "E"},
+        -- A cells: 10,3 9,3 9,4 8,3
+        {{10,3}, "A"}, {{9,3}, "A"}, {{9,4}, "A"}, {{8,3}, "A"},
+        -- C cells: 6,4 7,4 7,5 8,4
+        {{6,4}, "C"}, {{7,4}, "C"}, {{7,5}, "C"}, {{8,4}, "C"},
+        -- B cells: 6,5 7,6 8,5
+        {{6,5}, "B"}, {{7,6}, "B"}, {{8,5}, "B"},
+        -- D cells: 6,6 7,7 8,6
+        {{6,6}, "D"}, {{7,7}, "D"}, {{8,6}, "D"},
+        -- C cells: 6,7 7,8 7,9 8,7
+        {{6,7}, "C"}, {{7,8}, "C"}, {{7,9}, "C"}, {{8,7}, "C"},
+        -- C cells: 6,8 8,8 (changed to match 6,7 type)
+        {{6,8}, "C"}, {{8,8}, "C"},
+        -- B cells: 6,9 7,10 8,9
+        {{6,9}, "B"}, {{7,10}, "B"}, {{8,9}, "B"},
+        -- D cells: 6,10 7,11 8,10
+        {{6,10}, "D"}, {{7,11}, "D"}, {{8,10}, "D"}
     }
     
-    for _, ball in ipairs(startingBalls) do
-        local row, col, ballType = ball[1], ball[2], ball[3]
+    -- Place all pre-defined cells
+    for _, cellData in ipairs(prePlacedCells) do
+        local pos = cellData[1]
+        local letter = cellData[2]
+        local row, col = pos[1], pos[2]
+        
         if self:isValidGridPosition(row, col) then
             local idx = (row - 1) * 20 + col
-            self.cells[idx].ballType = ballType
-            self.cells[idx].occupied = true
-            self.cells[idx].tier = "basic"
+            if self.cells[idx] and not self.cells[idx].permanent then
+                self.cells[idx].ballType = letterTypes[letter]
+                self.cells[idx].occupied = true
+                self.cells[idx].tier = "basic"
+            end
         end
     end
+end
+
+-- Simple ammo system helpers
+function Grid:getCurrentShooterBall()
+    if self.currentShotIndex <= 15 then
+        return self.ammo[self.currentShotIndex]
+    end
+    return nil
+end
+
+function Grid:getOnDeckBall()
+    if self.currentShotIndex < 15 then
+        return self.ammo[self.currentShotIndex + 1]
+    end
+    return nil
+end
+
+function Grid:getShotsRemaining()
+    return math.max(0, 15 - self.currentShotIndex + 1)
 end
 
 -- Validate grid position bounds
@@ -338,21 +401,29 @@ function Grid:handleInput()
     elseif pd.buttonJustPressed(pd.kButtonB) then
         self:init() -- Reset level to starting state
     elseif pd.buttonJustPressed(pd.kButtonA) and not self.ball and 
-           self.shooterBallType and not self.isAnimating then
+           self:getCurrentShooterBall() and not self.isAnimating then
         self:shootBall()
     end
 end
 
 -- Fire a ball from shooter position  
 function Grid:shootBall()
+    local currentBall = self:getCurrentShooterBall()
+    if not currentBall then
+        return  -- No ammo left
+    end
+    
     self.ball = {
         x = self.shooterX,
         y = self.shooterY,
         vx = -self.aimCos * BALL_SPEED,
         vy = -self.aimSin * BALL_SPEED,
-        ballType = self.shooterBallType,
+        ballType = currentBall,
         bounces = 0  -- Track bounce count (max 3)
     }
+    
+    -- Simple: just advance to next shot
+    self.currentShotIndex = self.currentShotIndex + 1
     
     -- Handle creep spawning cycles
     self:handleCreepCycle()
@@ -501,6 +572,11 @@ function Grid:handleBallLanding()
         
         -- Check for merges
         self:checkForMerges(landingIdx)
+        
+        -- Check if this was the final ball landing (shot 15) - do conversion BEFORE creep cycle
+        if self.currentShotIndex > 15 then
+            self:convertBasicBubblesToCreeps()
+        end
         
         -- Handle troop spawning and shot counting (happens on every shot)
         self:handleTroopShotCounting()
@@ -733,9 +809,43 @@ function Grid:updateAnimations()
                     pattern = anim.pattern
                 }
                 
-                -- Spawn troop from newly created tier 3
+                -- Start flashing animation (3 flashes over 1 second = 60 frames)
+                self.animations[#self.animations + 1] = {
+                    type = "tier3_flash",
+                    centerIdx = anim.centerIdx,
+                    centerX = anim.endX,
+                    centerY = anim.endY,
+                    sprite = anim.sprite,
+                    pattern = anim.pattern,
+                    frame = 0,
+                    flashCount = 0  -- Track number of flashes completed
+                }
+                
+                -- Don't keep this animation
+            else
+                activeAnimations[#activeAnimations + 1] = anim
+            end
+        elseif anim.type == "tier3_flash" then
+            anim.frame = anim.frame + 1
+            
+            -- Flash every 10 frames (6 times per second)
+            if anim.frame % 10 == 0 then
+                anim.flashCount = anim.flashCount + 1
+            end
+            
+            -- After 60 frames (1 second) and 6 flashes (3 on/off cycles)
+            if anim.frame >= 60 and anim.flashCount >= 6 then
+                -- Spawn single tier 3 troop
                 local rallyPos = self:getRandomRallyPoint()
-                self:spawnTroop(anim.endX, anim.endY, "tier3", TROOP_SIZE_TIER3, rallyPos)
+                self:spawnTroop(anim.centerX, anim.centerY, "tier3", TROOP_SIZE_TIER3, rallyPos)
+                
+                -- Despawn the tier 3 bubble - clear from grid and tracking
+                for _, idx in ipairs(anim.pattern) do
+                    self.cells[idx].occupied = false
+                    self.cells[idx].ballType = nil
+                    self.cells[idx].tier = "basic"
+                end
+                self.tierThreePositions[anim.centerIdx] = nil
                 
                 -- Don't keep this animation
             else
@@ -1319,35 +1429,364 @@ end
 -- ENEMY CREEP SYSTEMS
 -- ============================================================================
 
-function Grid:handleCreepCycle()
-    self.creepCycleCount = self.creepCycleCount + 1
+-- Convert all basic bubbles to creeps when final ball lands
+function Grid:convertBasicBubblesToCreeps()
+    local basicBubbles = {}
     
-    if self.creepCycleCount == 1 then
-        -- Shot 1: 5x Basic creeps
+    -- Find all basic bubbles on the grid
+    for idx, cell in pairs(self.cells) do
+        if cell.occupied and cell.tier == "basic" then
+            local pos = self.positions[idx]
+            if pos then
+                basicBubbles[#basicBubbles + 1] = {
+                    idx = idx,
+                    x = pos.x,
+                    y = pos.y,
+                    ballType = cell.ballType
+                }
+            end
+        end
+    end
+    
+    -- Convert each basic bubble to a creep
+    for _, bubble in ipairs(basicBubbles) do
+        -- Clear the bubble from the grid
+        self.cells[bubble.idx].occupied = false
+        self.cells[bubble.idx].ballType = nil
+        self.cells[bubble.idx].tier = "basic"
+        
+        -- Find a staging position for this creep (prefer spreading them out)
+        local stagingIdx = self:findStagingForConvertedCreep()
+        local stagingPos = self.positions[stagingIdx]
+        
+        if stagingPos then
+            -- Create arc path with variance for chaotic movement
+            local arcParams = self:calculateArcPath(bubble.x, bubble.y, stagingPos.x, stagingPos.y)
+            
+            -- Add converted creep with arc movement
+            self.creeps[#self.creeps + 1] = {
+                x = bubble.x,
+                y = bubble.y,
+                targetX = stagingPos.x,
+                targetY = stagingPos.y,
+                animating = true,
+                staged = false,
+                stagingIdx = stagingIdx,
+                tier = "basic",
+                size = 3,
+                marching = false,
+                converted = true,  -- Mark as converted from bubble
+                -- Arc movement parameters
+                arcStartX = bubble.x,
+                arcStartY = bubble.y,
+                arcEndX = stagingPos.x,
+                arcEndY = stagingPos.y,
+                arcMidX = arcParams.midX,
+                arcMidY = arcParams.midY,
+                arcProgress = 0  -- 0 to 1 for arc progression
+            }
+            
+            -- Mark staging position as having creeps
+            self.stagingOccupied[stagingIdx] = true
+        end
+    end
+    
+    print("FINAL CONVERSION: Converted " .. #basicBubbles .. " basic bubbles to creeps!")
+end
+
+-- Find staging position for converted creeps (distribute across all positions)
+function Grid:findStagingForConvertedCreep()
+    -- Count creeps at each staging position
+    local stagingCounts = {}
+    for _, idx in ipairs(CREEP_STAGING_POSITIONS) do
+        stagingCounts[idx] = 0
+    end
+    
+    -- Count all creeps (including converted ones)
+    for _, creep in ipairs(self.creeps) do
+        if not creep.marching and stagingCounts[creep.stagingIdx] then
+            stagingCounts[creep.stagingIdx] = stagingCounts[creep.stagingIdx] + 1
+        end
+    end
+    
+    -- Find position with fewest creeps
+    local minCount = math.huge
+    local bestPositions = {}
+    for idx, count in pairs(stagingCounts) do
+        if count < minCount then
+            minCount = count
+            bestPositions = {idx}
+        elseif count == minCount then
+            bestPositions[#bestPositions + 1] = idx
+        end
+    end
+    
+    -- Return random position from those with minimum count
+    return bestPositions[math.random(1, #bestPositions)]
+end
+
+-- Calculate arc path parameters for chaotic movement
+function Grid:calculateArcPath(startX, startY, endX, endY)
+    local midX = (startX + endX) / 2
+    local midY = (startY + endY) / 2
+    
+    -- Add variance to create chaotic arcing
+    local variance = 80 + math.random(-30, 30)  -- Arc height with randomness
+    local direction = math.random() > 0.5 and 1 or -1  -- Random arc direction
+    
+    -- Calculate perpendicular offset for arc
+    local dx = endX - startX
+    local dy = endY - startY
+    local dist = math.sqrt(dx*dx + dy*dy)
+    
+    if dist > 0 then
+        -- Normalize and rotate 90 degrees for perpendicular
+        local perpX = -dy / dist
+        local perpY = dx / dist
+        
+        -- Apply variance
+        midX = midX + perpX * variance * direction
+        midY = midY + perpY * variance * direction
+    end
+    
+    return {
+        midX = midX,
+        midY = midY
+    }
+end
+
+-- Check if all converted creeps are staged and trigger final attack
+function Grid:checkForFinalAttack()
+    -- Only check if we have converted creeps and haven't already triggered final attack
+    if not self.finalAttackTriggered and self:hasConvertedCreeps() then
+        local allConverted = self:areAllConvertedCreepsStaged()
+        
+        if allConverted then
+            self.finalAttackTriggered = true
+            self.finalAttackDelay = 30  -- 30-frame delay before final march
+            print("FINAL ATTACK: All converted creeps staged! Attack launching in 30 frames...")
+        end
+    end
+    
+    -- Handle final attack delay countdown
+    if self.finalAttackTriggered and self.finalAttackDelay then
+        self.finalAttackDelay = self.finalAttackDelay - 1
+        
+        if self.finalAttackDelay <= 0 then
+            self.finalAttackDelay = nil
+            self:startCreepMarch()
+            print("FINAL ATTACK: All creeps marching!")
+        end
+    end
+end
+
+-- Check if there are any converted creeps
+function Grid:hasConvertedCreeps()
+    for _, creep in ipairs(self.creeps) do
+        if creep.converted then
+            return true
+        end
+    end
+    return false
+end
+
+-- Check if all converted creeps have reached their staging positions
+function Grid:areAllConvertedCreepsStaged()
+    for _, creep in ipairs(self.creeps) do
+        if creep.converted and not creep.staged then
+            return false
+        end
+    end
+    return true
+end
+
+-- Check if there are basic bubbles on the grid that could be converted
+function Grid:hasBasicBubblesToConvert()
+    for idx, cell in pairs(self.cells) do
+        if cell.occupied and cell.tier == "basic" then
+            return true
+        end
+    end
+    return false
+end
+
+-- Find collision-free staging position near target, respecting rally line boundary
+function Grid:findCreepStagingPosition(targetX, targetY, creepSize)
+    local searchRadius = 5
+    local maxRadius = 50
+    local rallyLineX = 330  -- Correct x-coordinate of rally dashed line
+    
+    -- Start at exact target and spiral outward
+    for radius = 0, maxRadius, searchRadius do
+        local positions = {}
+        
+        if radius == 0 then
+            -- Check exact position first
+            positions[1] = {x = targetX, y = targetY}
+        else
+            -- Generate positions in a circle around target
+            local numPositions = math.max(8, radius * 2)  -- More positions for larger radius
+            for i = 1, numPositions do
+                local angle = (i - 1) * (2 * math.pi / numPositions)
+                local x = targetX + radius * math.cos(angle)
+                local y = targetY + radius * math.sin(angle)
+                
+                -- Prefer positions that go backward (away from rally line) rather than forward
+                if x >= rallyLineX then  -- Don't cross in front of rally line
+                    positions[#positions + 1] = {x = x, y = y}
+                end
+            end
+            
+            -- If no positions behind rally line, try positions exactly on the line
+            if #positions == 0 then
+                for i = 1, numPositions do
+                    local angle = (i - 1) * (2 * math.pi / numPositions)
+                    local x = targetX + radius * math.cos(angle)
+                    local y = targetY + radius * math.sin(angle)
+                    
+                    if x >= rallyLineX - 5 then  -- Allow slight buffer at rally line
+                        positions[#positions + 1] = {x = x, y = y}
+                    end
+                end
+            end
+        end
+        
+        -- Test each position for collisions
+        for _, pos in ipairs(positions) do
+            if self:isCreepPositionFree(pos.x, pos.y, creepSize) then
+                return pos
+            end
+        end
+    end
+    
+    -- Fallback: return target position even if it causes collision
+    return {x = targetX, y = targetY}
+end
+
+-- Check if a position is free of collisions with other creeps
+function Grid:isCreepPositionFree(x, y, size)
+    local buffer = 2  -- Minimum spacing between creeps
+    
+    for _, otherCreep in ipairs(self.creeps) do
+        if otherCreep.staged or not otherCreep.animating then
+            local dx = x - otherCreep.x
+            local dy = y - otherCreep.y
+            local dist = math.sqrt(dx*dx + dy*dy)
+            local minDist = (size + otherCreep.size) / 2 + buffer
+            
+            if dist < minDist then
+                return false  -- Too close to another creep
+            end
+        end
+    end
+    
+    -- Also check screen boundaries
+    if x < 10 or x > 410 or y < 10 or y > 230 then
+        return false
+    end
+    
+    return true
+end
+
+-- Find queue position for creep - simple collision-based spacing
+function Grid:findQueuePosition(creep, rallyLineX)
+    local spacing = 6  -- Minimum spacing between creeps
+    local maxQueueDepth = 40  -- How far back queue can extend
+    
+    -- Start at the dashed line and work backwards
+    for distance = 0, maxQueueDepth, 2 do
+        local testX = rallyLineX + distance
+        local testY = creep.y  -- Keep current Y position to reduce movement
+        
+        -- Check if this position is free
+        local positionFree = true
+        for _, otherCreep in ipairs(self.creeps) do
+            if otherCreep ~= creep and otherCreep.marching and not otherCreep.crossedLine then
+                local dx = testX - otherCreep.x
+                local dy = testY - otherCreep.y
+                local dist = math.sqrt(dx*dx + dy*dy)
+                
+                if dist < spacing then
+                    positionFree = false
+                    break
+                end
+            end
+        end
+        
+        if positionFree then
+            return testX
+        end
+    end
+    
+    -- Fallback: position at the line
+    return rallyLineX
+end
+
+function Grid:handleCreepCycle()
+    local shotNumber = self.currentShotIndex
+    
+    -- Don't spawn creeps on the final ball launch (shot 15)
+    if shotNumber >= 15 then
+        -- Check if ammo is exhausted and start marching if so
+        local ammoExhausted = (self.currentShotIndex > 15)
+        if ammoExhausted then
+            -- Check if there are basic bubbles that will be converted
+            local hasBasicBubbles = self:hasBasicBubblesToConvert()
+            local hasConvertedCreeps = self:hasConvertedCreeps()
+            local allConverted = self:areAllConvertedCreepsStaged()
+            
+            -- Don't march if:
+            -- 1. We have basic bubbles that will be converted (they haven't converted yet)
+            -- 2. We have converted creeps still moving to staging
+            if not hasBasicBubbles and (not hasConvertedCreeps or allConverted) then
+                self:startCreepMarch()
+            end
+        end
+        return
+    end
+    
+    -- Random creep spawning based on shot number and dice roll
+    local roll = math.random(1, 100)
+    
+    -- Limit roll range based on shot number
+    if shotNumber == 1 then
+        roll = math.min(roll, 30)  -- Cannot roll above 30 on shot 1
+    elseif shotNumber == 2 then
+        roll = math.min(roll, 60)  -- Cannot roll above 60 on shot 2
+    end
+    -- Shot 3+: all rolls are valid (1-100)
+    
+    -- Determine spawning based on roll
+    if roll >= 1 and roll <= 10 then
+        self:spawnCreeps(1, "basic", 3)
+    elseif roll >= 11 and roll <= 20 then
+        self:spawnCreeps(2, "basic", 3)
+    elseif roll >= 21 and roll <= 30 then
+        self:spawnCreeps(3, "basic", 3)
+    elseif roll >= 31 and roll <= 40 then
+        self:spawnCreeps(1, "tier1", 4)
+    elseif roll >= 41 and roll <= 50 then
+        self:spawnCreeps(2, "tier1", 4)
+    elseif roll >= 51 and roll <= 60 then
         self:spawnCreeps(5, "basic", 3)
-    elseif self.creepCycleCount == 2 then
-        -- Shot 2: 3x Tier 1 creeps
+    elseif roll >= 61 and roll <= 70 then
+        self:spawnCreeps(8, "basic", 3)
+    elseif roll >= 71 and roll <= 80 then
         self:spawnCreeps(3, "tier1", 4)
-    elseif self.creepCycleCount == 3 then
-        -- Shot 3: 2x Tier 2 creeps
+    elseif roll >= 81 and roll <= 90 then
+        self:spawnCreeps(1, "tier2", 8)
+    elseif roll >= 91 and roll <= 100 then
         self:spawnCreeps(2, "tier2", 8)
-    elseif self.creepCycleCount == 4 then
-        -- Shot 4: Start marching existing creeps left
-        self:startCreepMarch()
-    elseif self.creepCycleCount >= 5 then
-        -- Shot 5+: Reset cycle
-        self.creepCycleCount = 1
-        self:spawnCreeps(5, "basic", 3)
     end
 end
 
 -- Spawn creeps with tier and size
 function Grid:spawnCreeps(count, tier, size)
-    local stagingIdx = self:findAvailableStaging()
-    if not stagingIdx then return end  -- No available staging positions
+    local stagingIdx = self:findAvailableStaging(tier)
+    if not stagingIdx then return end  -- Should never happen with new logic
     
     local stagingPos = self.positions[stagingIdx]
-    self.stagingOccupied[stagingIdx] = true
+    self.stagingOccupied[stagingIdx] = true  -- Mark as occupied (multiple creeps can share)
     
     -- Spawn all creeps to the same rally point with random spawn offsets
     for i = 1, count do
@@ -1366,8 +1805,9 @@ function Grid:spawnCreeps(count, tier, size)
     end
 end
 
--- Find available staging position (one with no creeps) - random selection
-function Grid:findAvailableStaging()
+-- Find available staging position - prefer empty, or choose position with fewest creeps of same tier
+function Grid:findAvailableStaging(tier)
+    -- First try: find completely empty staging positions
     local available = {}
     for _, idx in ipairs(CREEP_STAGING_POSITIONS) do
         if not self.stagingOccupied[idx] then
@@ -1378,25 +1818,110 @@ function Grid:findAvailableStaging()
     if #available > 0 then
         return available[math.random(1, #available)]
     end
-    return nil  -- All staging positions occupied
+    
+    -- Second try: all staging positions occupied, find one with fewest creeps of this tier
+    local stagingCounts = {}
+    for _, idx in ipairs(CREEP_STAGING_POSITIONS) do
+        stagingCounts[idx] = 0
+    end
+    
+    -- Count creeps of this tier at each staging position
+    for _, creep in ipairs(self.creeps) do
+        if creep.tier == tier and not creep.marching and stagingCounts[creep.stagingIdx] then
+            stagingCounts[creep.stagingIdx] = stagingCounts[creep.stagingIdx] + 1
+        end
+    end
+    
+    -- Find minimum count and positions with that count
+    local minCount = math.huge
+    local bestPositions = {}
+    for idx, count in pairs(stagingCounts) do
+        if count < minCount then
+            minCount = count
+            bestPositions = {idx}
+        elseif count == minCount then
+            bestPositions[#bestPositions + 1] = idx
+        end
+    end
+    
+    -- Choose randomly among tied positions
+    if #bestPositions > 0 then
+        return bestPositions[math.random(1, #bestPositions)]
+    end
+    
+    return nil  -- Should never happen
 end
 
 -- Start marching all creeps to the left
 function Grid:startCreepMarch()
+    local rallyLineX = 330  -- Dashed line x-coordinate (corrected)
+    
     for _, creep in ipairs(self.creeps) do
         creep.marching = true
         creep.animating = false
+        creep.crossedLine = false  -- Track which creeps have crossed the dashed line
+        
+        -- Ensure all creeps start from behind the dashed line
+        if creep.x <= rallyLineX then
+            creep.x = rallyLineX + 10  -- Position 10 pixels behind the line
+        end
     end
 end
 
 -- Update all creeps movement and collision
 function Grid:updateCreeps()
+    -- Handle dashed line crossing timer
+    self.linesCrossingTimer = self.linesCrossingTimer + 1
+    local shouldSelectCrosser = (self.linesCrossingTimer >= 2)
+    
+    -- Select one creep to cross the line this cycle (if timer allows)
+    if shouldSelectCrosser then
+        self.linesCrossingTimer = 0  -- Reset timer
+        
+        local rallyLineX = 330  -- Dashed line x-coordinate (corrected)
+        local waitingCreeps = {}
+        
+        -- Find all creeps waiting at the front line (only those at the dashed line)
+        for _, creep in ipairs(self.creeps) do
+            if creep.marching and not creep.crossedLine and 
+               creep.x <= rallyLineX + 2 and creep.x >= rallyLineX - 2 then
+                waitingCreeps[#waitingCreeps + 1] = creep
+            end
+        end
+        
+        -- Randomly choose one waiting creep to cross
+        if #waitingCreeps > 0 then
+            local chosenCreep = waitingCreeps[math.random(1, #waitingCreeps)]
+            chosenCreep.crossedLine = true
+        end
+    end
+    
+    -- Update all creep positions
     for i = #self.creeps, 1, -1 do
         local creep = self.creeps[i]
         
         if creep.marching then
-            -- March left until offscreen
-            creep.x = creep.x - CREEP_MOVE_SPEED
+            local rallyLineX = 330  -- Dashed line x-coordinate (corrected)
+            
+            -- Check if creep hasn't crossed yet
+            if not creep.crossedLine then
+                -- Find queue position and move toward it
+                local targetX = self:findQueuePosition(creep, rallyLineX)
+                
+                if creep.x > targetX + 1 then
+                    -- Move toward queue position
+                    creep.x = creep.x - CREEP_MOVE_SPEED
+                elseif creep.x < targetX - 1 then
+                    -- Move toward queue position (in case overshot)
+                    creep.x = creep.x + CREEP_MOVE_SPEED
+                else
+                    -- Close enough - snap to position to stop jitter
+                    creep.x = targetX
+                end
+            else
+                -- Normal marching (already crossed)
+                creep.x = creep.x - CREEP_MOVE_SPEED
+            end
             
             -- Remove if offscreen (left edge)
             if creep.x < -20 then
@@ -1405,24 +1930,56 @@ function Grid:updateCreeps()
                 table.remove(self.creeps, i)
             end
         elseif creep.animating then
-            -- Move toward target position
-            local dx = creep.targetX - creep.x
-            local dy = creep.targetY - creep.y
-            local dist = math.sqrt(dx*dx + dy*dy)
-            
-            if dist <= CREEP_MOVE_SPEED then
-                -- Reached target
-                creep.x = creep.targetX
-                creep.y = creep.targetY
-                creep.animating = false
-                creep.staged = true
+            if creep.converted and creep.arcProgress ~= nil then
+                -- Arc movement for converted creeps (twice as fast)
+                creep.arcProgress = creep.arcProgress + (CREEP_MOVE_SPEED * 2 / 200)  -- Double speed for converted creeps
+                
+                if creep.arcProgress >= 1.0 then
+                    -- Find collision-free position near target
+                    local finalPos = self:findCreepStagingPosition(creep.targetX, creep.targetY, creep.size)
+                    creep.x = finalPos.x
+                    creep.y = finalPos.y
+                    creep.animating = false
+                    creep.staged = true
+                    creep.arcProgress = nil  -- Clean up arc data
+                else
+                    -- Calculate position along quadratic bezier curve
+                    local t = creep.arcProgress
+                    local oneMinusT = 1 - t
+                    
+                    -- Quadratic bezier: P(t) = (1-t)²P₀ + 2(1-t)tP₁ + t²P₂
+                    creep.x = oneMinusT * oneMinusT * creep.arcStartX + 
+                             2 * oneMinusT * t * creep.arcMidX + 
+                             t * t * creep.arcEndX
+                             
+                    creep.y = oneMinusT * oneMinusT * creep.arcStartY + 
+                             2 * oneMinusT * t * creep.arcMidY + 
+                             t * t * creep.arcEndY
+                end
             else
-                -- Move toward target
-                creep.x = creep.x + (dx/dist) * CREEP_MOVE_SPEED
-                creep.y = creep.y + (dy/dist) * CREEP_MOVE_SPEED
+                -- Normal linear movement for regular creeps
+                local dx = creep.targetX - creep.x
+                local dy = creep.targetY - creep.y
+                local dist = math.sqrt(dx*dx + dy*dy)
+                
+                if dist <= CREEP_MOVE_SPEED then
+                    -- Find collision-free position near target
+                    local finalPos = self:findCreepStagingPosition(creep.targetX, creep.targetY, creep.size)
+                    creep.x = finalPos.x
+                    creep.y = finalPos.y
+                    creep.animating = false
+                    creep.staged = true
+                else
+                    -- Move toward target
+                    creep.x = creep.x + (dx/dist) * CREEP_MOVE_SPEED
+                    creep.y = creep.y + (dy/dist) * CREEP_MOVE_SPEED
+                end
             end
         end
     end
+    
+    -- Check if all converted creeps have reached staging and trigger final attack
+    self:checkForFinalAttack()
     
     -- Handle all unit collisions (already called in updateTroops, avoid double calling)
     -- self:resolveAllUnitCollisions()
@@ -1557,14 +2114,27 @@ function Grid:drawBalls()
             tierTwoData.centerX - 26, tierTwoData.centerY - 26)
     end
     
-    -- Tier 3 bubbles (render at stored center positions)
+    -- Tier 3 bubbles (render at stored center positions, skip if currently flashing)
     for idx, tierThreeData in pairs(self.tierThreePositions) do
-        self.bubbleSprites.tier3[tierThreeData.sprite]:draw(
-            tierThreeData.centerX - 42, tierThreeData.centerY - 42)
+        -- Check if this tier 3 bubble is currently flashing
+        local isFlashing = false
+        for _, anim in ipairs(self.animations) do
+            if anim.type == "tier3_flash" and anim.centerIdx == idx then
+                isFlashing = true
+                break
+            end
+        end
+        
+        -- Only draw if not flashing (flashing is handled in drawAnimations)
+        if not isFlashing then
+            self.bubbleSprites.tier3[tierThreeData.sprite]:draw(
+                tierThreeData.centerX - 42, tierThreeData.centerY - 42)
+        end
     end
     
     -- Shooter ball (with flashing for game over)
-    if not self.ball and self.shooterBallType then
+    local currentShooterBall = self:getCurrentShooterBall()
+    if not self.ball and currentShooterBall then
         local shouldDraw = true
         if self.gameState == "flashing" then
             shouldDraw = (math.floor(self.flashTimer / 10) % 2) == 0
@@ -1577,7 +2147,7 @@ function Grid:drawBalls()
             gfx.drawLine(self.shooterX, self.shooterY, endX, endY)
             
             -- Shooter ball (renders on top of aim line)
-            self.bubbleSprites.basic[self.shooterBallType]:draw(self.shooterX - 10, self.shooterY - 10)
+            self.bubbleSprites.basic[currentShooterBall]:draw(self.shooterX - 10, self.shooterY - 10)
         end
     end
     
@@ -1614,20 +2184,7 @@ end
 
 -- Spawn troops from all tier bubbles after shot landing
 function Grid:spawnTroopsFromBubbles()
-    
-    -- Spawn from Tier 1 bubbles
-    for idx, tierData in pairs(self.tierOnePositions) do
-        local rallyPos = self:getRandomRallyPoint()
-        self:spawnTroop(tierData.centerX, tierData.centerY, "tier1", TROOP_SIZE_TIER1, rallyPos)
-    end
-    
-    -- Spawn from Tier 2 bubbles  
-    for idx, tierData in pairs(self.tierTwoPositions) do
-        local rallyPos = self:getRandomRallyPoint()
-        self:spawnTroop(tierData.centerX, tierData.centerY, "tier2", TROOP_SIZE_TIER2, rallyPos)
-    end
-    
-    -- Spawn from Tier 3 bubbles
+    -- Only spawn from Tier 3 bubbles (Tier 1 and Tier 2 no longer spawn troops)
     for idx, tierData in pairs(self.tierThreePositions) do
         local rallyPos = self:getRandomRallyPoint()
         self:spawnTroop(tierData.centerX, tierData.centerY, "tier3", TROOP_SIZE_TIER3, rallyPos)
@@ -2101,21 +2658,23 @@ end
 function Grid:handleTroopShotCounting()
     self.troopShotCounter = self.troopShotCounter + 1
     
-    -- Shot 4: march all troops off screen and reset cycle
-    if self.troopShotCounter == 4 then
+    -- Check if ammo is exhausted (no more shots available)
+    local ammoExhausted = (self.currentShotIndex > 15)
+    
+    -- Shot 4: march all troops off screen and reset cycle, but only if ammo is exhausted
+    if self.troopShotCounter == 4 and ammoExhausted then
         self:marchTroopsOffscreen()
         self.troopShotCounter = 0  -- Reset for next cycle
+    elseif self.troopShotCounter >= 4 and not ammoExhausted then
+        -- Keep counting but don't march until ammo runs out
+        -- troopShotCounter will keep incrementing beyond 4
     end
 end
 -- Spawn troops when merges/tiers complete (called from animation completions)
 function Grid:spawnTroopsForShot()
-    -- Always spawn from existing tier bubbles
-    self:spawnTroopsFromBubbles()
-    
-    -- Shots 2, 6, 10, etc.: also spawn from 1/3 of basic bubbles
-    if self.troopShotCounter == 2 or (self.troopShotCounter > 2 and (self.troopShotCounter - 2) % 4 == 0) then
-        self:spawnBasicTroops()
-    end
+    -- Only spawn from Tier 3 bubbles (with new flashing behavior)
+    -- Note: Tier 3 spawning is now handled by the flashing animation system
+    -- No immediate spawning - Tier 3 bubbles will flash then spawn and despawn
 end
 
 -- Draw active animations
@@ -2153,16 +2712,41 @@ function Grid:drawAnimations()
             local currentX = anim.startX + (anim.endX - anim.startX) * progress
             local currentY = anim.startY + (anim.endY - anim.startY) * progress
             self.bubbleSprites.tier3[anim.sprite]:draw(currentX - 42, currentY - 42)
+        elseif anim.type == "tier3_flash" then
+            -- Flash on/off every 10 frames (visible on frames 0-9, 20-29, 40-49)
+            local flashCycle = math.floor(anim.frame / 10) % 2
+            if flashCycle == 0 then  -- Show on even cycles (0, 2, 4)
+                self.bubbleSprites.tier3[anim.sprite]:draw(anim.centerX - 42, anim.centerY - 42)
+            end
+            -- Don't draw on odd cycles (1, 3, 5) to create flashing effect
         end
     end
 end
 
 -- Draw UI elements
 function Grid:drawUI()
-    -- On-deck ball (always show with infinite shots)
-    local onDeckPos = self.positions[(15 - 1) * 20 + 17]
-    if onDeckPos then
-        self.bubbleSprites.basic[self.onDeckBallType]:draw(onDeckPos.x - 10, onDeckPos.y - 10)
+    local shotsRemaining = self:getShotsRemaining()
+    local currentShooter = self:getCurrentShooterBall()
+    local onDeckBall = self:getOnDeckBall()
+    
+    
+    -- On-deck ball (only show if exists AND more than 1 shot remains)
+    if onDeckBall and shotsRemaining > 1 then
+        local onDeckPos = self.positions[(15 - 1) * 20 + 17]
+        if onDeckPos then
+            self.bubbleSprites.basic[onDeckBall]:draw(onDeckPos.x - 10, onDeckPos.y - 10)
+        end
+    end
+    
+    -- Shot count (only show if shots remaining > 0)
+    if shotsRemaining > 0 then
+        local onDeckPos = self.positions[(15 - 1) * 20 + 17]
+        if onDeckPos then
+            gfx.setColor(gfx.kColorBlack)
+            local countText = tostring(shotsRemaining)
+            local textWidth, textHeight = gfx.getTextSize(countText)
+            gfx.drawText(countText, onDeckPos.x + 15, onDeckPos.y - textHeight / 2)
+        end
     end
 end
 
