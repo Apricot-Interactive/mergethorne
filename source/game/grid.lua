@@ -49,20 +49,40 @@ local CREEP_STAGING_POSITIONS <const> = {
 }
 local CREEP_SPAWN_OFFSET <const> = 100  -- Pixels to right of staging spot
 local CREEP_MOVE_SPEED <const> = 2      -- Pixels per frame movement speed
-local CREEP_MARCH_SPEED <const> = 0.5   -- Pixels per frame when marching left toward towers (50% slower again)
+local CREEP_MARCH_SPEED <const> = 0.75  -- Pixels per frame when marching toward towers (1.5x faster)
 local CREEP_SIZE <const> = 3            -- Collision radius (4px sprite with 1px transparent edge)
 local CREEP_RALLY_LINE_X <const> = 330  -- X coordinate of dashed line where creeps queue
-local CREEP_LINE_CROSSING_DELAY <const> = 2  -- Frames between creeps crossing rally line
 
--- Creep hitpoints by tier (affects how much damage they can take)
-local CREEP_HP_BASIC <const> = 20   -- Basic creeps (weakest)
-local CREEP_HP_TIER1 <const> = 40   -- Tier 1 creeps (medium)
-local CREEP_HP_TIER2 <const> = 80   -- Tier 2 creeps (strongest)
+-- REBALANCED: Creep hitpoints for strategic combat (playtesting balance)
+local CREEP_HP_BASIC <const> = 30   -- Basic creeps: 10 hits from flame, 2.5 from tremor
+local CREEP_HP_TIER1 <const> = 90   -- Tier 1 creeps: 30 hits from flame, 7.5 from tremor
+local CREEP_HP_TIER2 <const> = 200  -- Tier 2 creeps: 67 hits from flame, 17 from tremor
 
--- Creep combat capabilities
-local CREEP_ATTACK_RANGE <const> = 25   -- Range for creep to attack towers
-local CREEP_ATTACK_DAMAGE <const> = 5   -- Damage per creep attack
-local CREEP_ATTACK_COOLDOWN <const> = 30 -- Frames between creep attacks
+-- REBALANCED: Creep combat capabilities (Basic suicide, Tier 1+2 ranged)
+local CREEP_ATTACK_RANGE <const> = 30   -- Range for basic creep suicide attacks
+local CREEP_BASIC_DAMAGE <const> = 15   -- Basic creep suicide damage
+local CREEP_ATTACK_COOLDOWN <const> = 25 -- Frames between basic creep attacks
+
+-- Tier 1 ranged combat system (aggressive, close-range, balanced vs old suicide)
+local CREEP_TIER1_RANGE <const> = 100   -- Tier 1 shooting range (shorter than Tier 2)
+local CREEP_TIER1_DAMAGE <const> = 20   -- Tier 1 ranged damage per shot (balanced for sustained DPS)
+local CREEP_TIER1_COOLDOWN <const> = 90 -- Tier 1 shot cooldown (1.5 seconds vs Tier 2's 1 sec)
+local CREEP_TIER1_MIN_DISTANCE <const> = 20 -- Tier 1s get twice as close (was 40 for Tier 2)
+
+-- Tier 2 ranged combat system (cautious, long-range)
+local CREEP_TIER2_RANGE <const> = 150   -- Tier 2 shooting range
+local CREEP_TIER2_DAMAGE <const> = 25   -- Tier 2 ranged damage per shot
+local CREEP_TIER2_COOLDOWN <const> = 60 -- Tier 2 shot cooldown (1 shot/second)
+local CREEP_TIER2_MIN_DISTANCE <const> = 40 -- Minimum distance Tier 2s maintain from targets
+
+-- Creep projectile constants
+local CREEP_TIER1_PROJECTILE_SPEED <const> = 3.0 -- Tier 1 projectile speed
+local CREEP_TIER2_PROJECTILE_SPEED <const> = 2.5 -- Tier 2 projectile speed (slightly slower)
+
+-- Lightning tower smart targeting weights (priority system)
+local LIGHTNING_TARGET_WEIGHT_TIER2 <const> = 100  -- Highest priority: Tier 2 creeps
+local LIGHTNING_TARGET_WEIGHT_TIER1 <const> = 50   -- Medium priority: Tier 1 creeps
+local LIGHTNING_TARGET_WEIGHT_BASIC <const> = 10   -- Lowest priority: Basic creeps
 
 -- ============================================================================
 -- ALLIED TROOP SYSTEM CONSTANTS  
@@ -87,13 +107,52 @@ local TROOP_SIZE_TIER3 <const> = 8   -- 9px sprite with 1px buffer
 -- ============================================================================
 -- TOWER COMBAT SYSTEM CONSTANTS
 -- ============================================================================
--- Tower types: 1=Flame (Fire), 2=Water, 3=Tremor (Earth), 4=Lightning, 5=Wind
+-- TOWER DESIGN PHILOSOPHY:
+-- Each tower type fills a unique tactical role with distinct strengths/weaknesses:
+--
+-- 1. FLAME TOWER (Fire) - Anti-swarm specialist
+--    Role: Fast, continuous damage with cone spread
+--    Strengths: High DPS, good vs basic creeps, fast reaction
+--    Weaknesses: Low damage per hit, shorter range
+--    Best against: Large groups of weak enemies
+--
+-- 2. RAIN TOWER (Water) - Area denial 
+--    Role: Constant area damage around tower position
+--    Strengths: No aim required, continuous damage, can't miss
+--    Weaknesses: Fixed position, limited range, predictable
+--    Best against: Enemies forced through chokepoints
+--
+-- 3. TREMOR TOWER (Earth) - Line formation breaker
+--    Role: Piercing arc shots that hit multiple enemies  
+--    Strengths: Pierces through enemies, good burst damage
+--    Weaknesses: Slower attack rate, requires good positioning
+--    Best against: Lined up enemies, medium-tier threats
+--
+-- 4. LIGHTNING TOWER (Lightning) - Single target assassin
+--    Role: Instant high damage to priority targets
+--    Strengths: Highest single-hit damage, instant delivery
+--    Weaknesses: Very short range, limited targets per attack
+--    Best against: High-value single targets, tier 2 creeps
+--
+-- 5. WIND TOWER (Wind) - Crowd control specialist  
+--    Role: Wide area spirograph patterns for area coverage
+--    Strengths: Longest range, unpredictable patterns
+--    Weaknesses: Complex timing, moderate damage
+--    Best against: Spread out enemies, area control
+--
+-- Tower types: 1=Flame (Fire), 2=Rain (Water), 3=Tremor (Earth), 4=Lightning, 5=Wind
 
 -- General tower properties
-local TOWER_HP <const> = 50                    -- Hitpoints for all Tier 1 towers
+local TOWER_HP <const> = 800                   -- Hitpoints for all towers (survivable vs creep rush)
 local TOWER_ATTACK_COOLDOWN <const> = 20       -- Default frames between attacks (3/sec at 60fps)
 local TOWER_SPRITE_RADIUS <const> = 18         -- Tier 1 tower sprite radius for collision
 local PROJECTILE_FIRE_RANGE_MULTIPLIER <const> = 2.5  -- Towers fire at 250% of projectile range
+
+-- OPTIMIZATION: Pre-computed constants for performance (avoid repeated calculations)
+local HALF_PI <const> = math.pi * 0.5          -- π/2 for perpendicular angles
+local TWO_PI <const> = math.pi * 2              -- 2π for angle normalization  
+local PI_OVER_180 <const> = math.pi / 180      -- Degrees to radians conversion
+local SQRT_EPSILON <const> = 0.000001          -- Epsilon for sqrt comparisons
 
 -- Flame Tower (ballType 1) - Rapid fire cone attacks
 local FLAME_TOWER_RANGE <const> = 240          -- Detection/targeting range
@@ -115,6 +174,13 @@ local TREMOR_TOWER_COOLDOWN <const> = 25       -- Frames between attacks (slower
 local TREMOR_ROTATION_SPEED <const> = math.pi / 12  -- Same rotation speed as flame
 local TREMOR_PROJECTILE_DAMAGE <const> = 3     -- Higher damage per projectile (pierces targets)
 
+-- Rain Tower (ballType 2) - Stationary damage dots
+local RAIN_DOTS_PER_FRAME <const> = 4          -- Number of dots spawned each frame
+local RAIN_DOT_LIFETIME <const> = 10           -- Frames each dot lasts (2x longer)
+local RAIN_DOT_DAMAGE <const> = 2              -- Damage per dot collision
+local RAIN_INNER_RADIUS <const> = 10           -- Inner radius (tower radius)
+local RAIN_OUTER_RADIUS <const> = 40           -- Outer radius (tower radius + 30px)
+
 -- Wind Tower (ballType 5) - Spirograph burst patterns
 local WIND_TOWER_RANGE <const> = 240           -- Detection/targeting range (same as others)
 local WIND_PROJECTILE_SPEED <const> = 2.0      -- Base speed of wind projectiles
@@ -125,6 +191,23 @@ local WIND_TOWER_COOLDOWN <const> = 34         -- 24 frame cooldown after burst 
 local WIND_ROTATION_SPEED <const> = math.pi / 12  -- Same rotation speed as other towers
 local WIND_PROJECTILE_DAMAGE <const> = 2       -- Moderate damage per projectile
 local WIND_SPIRAL_RADIUS <const> = 15          -- Radius of spirograph circle (pixels)
+
+-- ENHANCED: Wind tower pushback system - smooth animation with 3x distance
+local WIND_PUSHBACK_DISTANCE <const> = 27      -- Total pushback distance (3x original 9px)
+local WIND_PUSHBACK_DURATION <const> = 9       -- Frames to complete pushback animation (50% slower)
+local WIND_PUSHBACK_COOLDOWN <const> = 15      -- Frames between pushback applications
+
+-- BALANCED: Lightning Tower (ballType 4) - High burst damage, short range
+local LIGHTNING_TOWER_RANGE <const> = 160       -- Detection range (was 180, shorter for balance)
+local LIGHTNING_TOWER_COOLDOWN <const> = 8      -- Cooldown between sequences (was 6, slightly slower)
+local LIGHTNING_BOLT_RANGE <const> = 75         -- Lightning bolt max range (was 70, slightly longer)
+local LIGHTNING_BOLT_DAMAGE <const> = 35        -- Damage per bolt hit (was 12, massive increase!)
+local LIGHTNING_BOLTS_PER_SEQUENCE <const> = 2  -- Number of bolts fired in sequence
+local LIGHTNING_SEQUENCE_DURATION <const> = 8   -- Frames for entire sequence (bolts at frame 1 and 5)
+local LIGHTNING_BOLT_LIFETIME <const> = 3       -- Frames each bolt remains visible
+local LIGHTNING_SEGMENTS_MIN <const> = 3        -- Minimum jagged line segments (more branches)
+local LIGHTNING_SEGMENTS_MAX <const> = 6        -- Maximum jagged line segments (up to 6 branches)
+local LIGHTNING_JITTER_RANGE <const> = 15       -- Pixels of random jitter for jagged effect
 
 -- ============================================================================
 -- COLLISION AND BOUNDARY CONSTANTS
@@ -156,6 +239,23 @@ local TOWER_CONFIGS <const> = {
             piercing = false       -- Projectiles despawn on hit
         }
     },
+    [2] = { -- Rain Tower (Water)
+        name = "Rain",
+        range = 0,  -- No attack range - always active
+        projectileSpeed = 0,  -- Stationary dots
+        projectileRange = 0,  -- Dots don't move
+        projectileDamage = RAIN_DOT_DAMAGE,
+        projectilesPerShot = RAIN_DOTS_PER_FRAME,
+        cooldown = 1,  -- Spawn every frame
+        rotationSpeed = 0,  -- No rotation needed
+        special = {
+            dotLifetime = RAIN_DOT_LIFETIME,
+            innerRadius = RAIN_INNER_RADIUS,
+            outerRadius = RAIN_OUTER_RADIUS,
+            variableRange = false, -- Fixed area
+            piercing = false       -- Dots despawn on hit
+        }
+    },
     [3] = { -- Tremor Tower (Earth)
         name = "Tremor",
         range = TREMOR_TOWER_RANGE,
@@ -169,6 +269,25 @@ local TOWER_CONFIGS <const> = {
             arcAngle = TREMOR_ARC_ANGLE,
             variableRange = false, -- Fixed range
             piercing = true        -- Projectiles continue after hit
+        }
+    },
+    [4] = { -- Lightning Tower (Lightning)
+        name = "Lightning",
+        range = LIGHTNING_TOWER_RANGE,
+        projectileSpeed = 0, -- Instant bolts
+        projectileRange = LIGHTNING_BOLT_RANGE,
+        projectileDamage = LIGHTNING_BOLT_DAMAGE,
+        projectilesPerShot = LIGHTNING_BOLTS_PER_SEQUENCE,
+        cooldown = LIGHTNING_TOWER_COOLDOWN,
+        rotationSpeed = WIND_ROTATION_SPEED, -- Same as wind tower
+        special = {
+            sequenceDuration = LIGHTNING_SEQUENCE_DURATION,
+            boltLifetime = LIGHTNING_BOLT_LIFETIME,
+            segmentsMin = LIGHTNING_SEGMENTS_MIN,
+            segmentsMax = LIGHTNING_SEGMENTS_MAX,
+            jitterRange = LIGHTNING_JITTER_RANGE,
+            variableRange = false, -- Fixed range
+            piercing = false       -- Bolts hit once
         }
     },
     [5] = { -- Wind Tower (Wind)
@@ -187,7 +306,7 @@ local TOWER_CONFIGS <const> = {
             piercing = false       -- Projectiles despawn on hit
         }
     }
-    -- Future tower types: [2] = Water, [4] = Lightning
+    -- Future tower types: [2] = Water
 }
 
 local Grid = {}
@@ -347,6 +466,7 @@ function Grid:setupGameState()
     self.currentLevel = 1      -- Which level we're on (1-5)
     self.gameState = "playing"
     self.showDebug = false
+    self.frameCounter = 0      -- Global frame counter for knockback cooldown
     
     -- Free-floating shooter position
     self.shooterX = SHOOTER_X
@@ -370,7 +490,8 @@ function Grid:setupGameState()
     -- Creep spawning is now random based on dice rolls per shot
     self.finalAttackTriggered = false  -- Track if final attack sequence has begun
     self.finalAttackDelay = nil  -- Countdown timer before final march
-    self.linesCrossingTimer = 0  -- Timer for dashed line crossing (every 2 frames)
+    self.finaleTriggered = false  -- Simple finale trigger when ammo exhausted
+    self.finaleCountdown = nil  -- Simple countdown to start marching
     
     -- Troop system
     self.troops = {}  -- {x, y, targetX, targetY, tier, size, marching, rallied}
@@ -380,6 +501,8 @@ function Grid:setupGameState()
     
     -- Tower combat system
     self.projectiles = {}  -- {x, y, vx, vy, damage, towerType, lifespan, range}
+    self.rainDots = {}     -- {x, y, damage, lifetime, spawFrame, underTower} - stationary damage dots
+    self.lightningEffects = {}  -- {path, lifetime, damage, targetCreep} - instant lightning bolts
     
     -- Precompute aim direction
     self:updateAimDirection()
@@ -529,6 +652,8 @@ function Grid:advanceToNextLevel()
     -- Reset systems
     self.finalAttackTriggered = false
     self.finalAttackDelay = nil
+    self.finaleTriggered = false
+    self.finaleCountdown = nil
     self.troopShotCounter = 0
     self.troopMarchActive = false
     
@@ -549,163 +674,6 @@ function Grid:checkForVictory()
     end
 end
 
--- Setup test level for tower combat testing (D-pad Right)
-function Grid:setupTestLevel()
-    -- Reset to clean state first
-    self.gameState = "playing"
-    self.currentLevel = 1
-    self.flashTimer = 0
-    self.gameOverFlashCount = 0
-    self.magnetismDelayCounter = 0
-    self.finalAttackTriggered = false
-    self.finalAttackDelay = nil
-    self.linesCrossingTimer = 0
-    self.troopShotCounter = 0
-    self.troopMarchActive = false
-    
-    -- Set ammo to last shot (shot 15)
-    self.ammo = {}
-    for i = 1, 15 do
-        self.ammo[i] = math.random(1, 5)
-    end
-    self.currentShotIndex = 15  -- Last shot loaded
-    
-    -- Clear existing grid (except permanent boundaries)
-    for idx, cell in pairs(self.cells) do
-        if not cell.permanent then
-            cell.occupied = false
-            cell.ballType = nil
-            cell.tier = nil
-        end
-    end
-    
-    -- Clear tier tracking
-    self.tierOnePositions = {}
-    self.tierTwoPositions = {}
-    self.tierThreePositions = {}
-    
-    -- Clear units
-    self.creeps = {}
-    self.troops = {}
-    self.projectiles = {}
-    self.stagingOccupied = {}
-    self.rallyPointOccupied = {}
-    
-    -- Place Tier 1 towers in staggered zigzag pattern (left/right/left/right/left)
-    local towerPositions = {
-        {row = 2, col = 5, type = 1}, -- Fire (left)
-        {row = 4, col = 10, type = 2}, -- Water (right)
-        {row = 6, col = 5, type = 3}, -- Earth (left)
-        {row = 8, col = 10, type = 4}, -- Lightning (right)
-        {row = 10, col = 5, type = 5} -- Wind (left)
-    }
-    
-    for _, tower in ipairs(towerPositions) do
-        if self:isValidGridPosition(tower.row, tower.col) then
-            local centerIdx = (tower.row - 1) * 20 + tower.col
-            local centerPos = self.positions[centerIdx]
-            
-            if centerPos and self.cells[centerIdx] and not self.cells[centerIdx].permanent then
-                -- Create triangle formation around center
-                local neighbors = self:getNeighbors(centerIdx)
-                if #neighbors >= 6 then
-                    -- Use first triangle formation (indices 0, 1, 3 from neighbors)
-                    local triangle = {centerIdx, neighbors[2], neighbors[4]}
-                    
-                    -- Place tier 1 tower
-                    for _, idx in ipairs(triangle) do
-                        if self.cells[idx] and not self.cells[idx].permanent then
-                            self.cells[idx].ballType = tower.type
-                            self.cells[idx].occupied = true
-                            self.cells[idx].tier = "tier1"
-                        end
-                    end
-                    
-                    -- Add to tierOnePositions
-                    self.tierOnePositions[centerIdx] = {
-                        centerX = centerPos.x,
-                        centerY = centerPos.y,
-                        ballType = tower.type,
-                        triangle = triangle,
-                        hitpoints = TOWER_HP,
-                        maxHitpoints = TOWER_HP,
-                        lastAttackTime = 0,
-                        -- Flame tower tracking data
-                        currentTarget = nil,
-                        currentAngle = 0,
-                        targetAngle = 0
-                    }
-                end
-            end
-        end
-    end
-    
-    -- Spawn massive creep army at all staging positions
-    for _, stagingIdx in ipairs(CREEP_STAGING_POSITIONS) do
-        local stagingPos = self.positions[stagingIdx]
-        local safeTargetX = math.max(stagingPos.x, CREEP_RALLY_LINE_X + PROJECTILE_HIDE_DISTANCE)
-        
-        -- 8 basic creeps
-        for i = 1, 8 do
-            self.creeps[#self.creeps + 1] = {
-                x = stagingPos.x + CREEP_SPAWN_OFFSET + math.random(-10, 10),
-                y = stagingPos.y + math.random(-15, 15),
-                targetX = safeTargetX,
-                targetY = stagingPos.y,
-                animating = true,
-                staged = false,
-                stagingIdx = stagingIdx,
-                tier = "basic",
-                size = 3,
-                marching = false,
-                hitpoints = CREEP_HP_BASIC,
-                maxHitpoints = CREEP_HP_BASIC,
-                lastAttackTime = 0
-            }
-        end
-        
-        -- 3 tier1 creeps
-        for i = 1, 3 do
-            self.creeps[#self.creeps + 1] = {
-                x = stagingPos.x + CREEP_SPAWN_OFFSET + math.random(-10, 10),
-                y = stagingPos.y + math.random(-15, 15),
-                targetX = safeTargetX,
-                targetY = stagingPos.y,
-                animating = true,
-                staged = false,
-                stagingIdx = stagingIdx,
-                tier = "tier1",
-                size = 4,
-                marching = false,
-                hitpoints = CREEP_HP_TIER1,
-                maxHitpoints = CREEP_HP_TIER1,
-                lastAttackTime = 0
-            }
-        end
-        
-        -- 1 tier2 creep
-        self.creeps[#self.creeps + 1] = {
-            x = stagingPos.x + CREEP_SPAWN_OFFSET + math.random(-10, 10),
-            y = stagingPos.y + math.random(-15, 15),
-            targetX = safeTargetX,
-            targetY = stagingPos.y,
-            animating = true,
-            staged = false,
-            stagingIdx = stagingIdx,
-            tier = "tier2",
-            size = 8,
-            marching = false,
-            hitpoints = CREEP_HP_TIER2,
-            maxHitpoints = CREEP_HP_TIER2,
-            lastAttackTime = 0
-        }
-        
-        -- Mark staging as occupied
-        self.stagingOccupied[stagingIdx] = true
-    end
-    
-    print("TEST LEVEL: 5 towers placed, " .. #self.creeps .. " creeps spawned. Fire last shot to start battle!")
-end
 
 -- Validate grid position bounds
 function Grid:isValidGridPosition(row, col)
@@ -766,8 +734,6 @@ function Grid:handleInput()
     
     if pd.buttonJustPressed(pd.kButtonLeft) then
         self.showDebug = not self.showDebug
-    elseif pd.buttonJustPressed(pd.kButtonRight) then
-        self:setupTestLevel() -- Load tower combat test level
     elseif pd.buttonJustPressed(pd.kButtonB) then
         self:init() -- Reset level to starting state
     elseif pd.buttonJustPressed(pd.kButtonA) and not self.ball and 
@@ -806,11 +772,26 @@ function Grid:update()
         return
     end
     
+    -- Increment global frame counter for knockback cooldown tracking
+    self.frameCounter = self.frameCounter + 1
+    
     self:updateAnimations()
     self:updateCreeps()
     self:updateTroops()
     self:updateTowerCombat()
     self:updateProjectiles()
+    self:updateRainDots()
+    self:updateLightningEffects()
+    
+    -- Handle finale countdown (runs every frame)
+    if self.finaleTriggered and self.finaleCountdown then
+        self.finaleCountdown = self.finaleCountdown - 1
+        if self.finaleCountdown <= 0 then
+            self.finaleCountdown = nil
+            self:startCreepMarch()
+            print("FINALE: Creeps marching to attack!")
+        end
+    end
     
     -- Handle magnetism delay counter (check Tier 3 first, then Tier 2)
     if self.magnetismDelayCounter > 0 then
@@ -2073,61 +2054,23 @@ function Grid:isCreepPositionFree(x, y, size)
 end
 
 -- Find queue position for creep - simple collision-based spacing
-function Grid:findQueuePosition(creep, rallyLineX)
-    local spacing = 6  -- Minimum spacing between creeps
-    local maxQueueDepth = 40  -- How far back queue can extend
-    
-    -- Start at the dashed line and work backwards
-    for distance = 0, maxQueueDepth, 2 do
-        local testX = rallyLineX + distance
-        local testY = creep.y  -- Keep current Y position to reduce movement
-        
-        -- Check if this position is free
-        local positionFree = true
-        for _, otherCreep in ipairs(self.creeps) do
-            if otherCreep ~= creep and otherCreep.marching and not otherCreep.crossedLine then
-                local dx = testX - otherCreep.x
-                local dy = testY - otherCreep.y
-                local dist = math.sqrt(dx*dx + dy*dy)
-                
-                if dist < spacing then
-                    positionFree = false
-                    break
-                end
-            end
-        end
-        
-        if positionFree then
-            return testX
-        end
-    end
-    
-    -- Fallback: position at the line
-    return rallyLineX
-end
 
 function Grid:handleCreepCycle()
     local shotNumber = self.currentShotIndex
     
     -- Don't spawn creeps on the final ball launch (shot 15)
     if shotNumber >= 15 then
-        -- Check if ammo is exhausted and start marching if so
+        -- Simple finale trigger when ammo is exhausted
         local ammoExhausted = (self.currentShotIndex > 15)
-        if ammoExhausted then
-            -- Check if there are basic bubbles that will be converted
-            local hasBasicBubbles = self:hasBasicBubblesToConvert()
-            local hasConvertedCreeps = self:hasConvertedCreeps()
-            local allConverted = self:areAllConvertedCreepsStaged()
-            
-            -- Don't march if:
-            -- 1. We have basic bubbles that will be converted (they haven't converted yet)
-            -- 2. We have converted creeps still moving to staging
-            if not hasBasicBubbles and (not hasConvertedCreeps or allConverted) then
-                self:startCreepMarch()
-            end
+        
+        if ammoExhausted and not self.finaleTriggered then
+            self.finaleTriggered = true
+            self.finaleCountdown = 60  -- 2 second delay before marching starts
+            print("FINALE: Ammo exhausted! Creeps will march in 2 seconds...")
         end
         return
     end
+    
     
     -- Random creep spawning based on shot number and dice roll
     local roll = math.random(1, 100)
@@ -2167,7 +2110,9 @@ end
 -- Spawn creeps with tier and size
 function Grid:spawnCreeps(count, tier, size)
     local stagingIdx = self:findAvailableStaging(tier)
-    if not stagingIdx then return end  -- Should never happen with new logic
+    if not stagingIdx then 
+        return 
+    end  -- Should never happen with new logic
     
     local stagingPos = self.positions[stagingIdx]
     self.stagingOccupied[stagingIdx] = true  -- Mark as occupied (multiple creeps can share)
@@ -2199,6 +2144,16 @@ function Grid:spawnCreeps(count, tier, size)
             hitpoints = hitpoints,
             maxHitpoints = hitpoints,
             lastAttackTime = 0,
+            stunFrames = 0,  -- Earthquake wave stun counter
+            lastKnockbackFrame = 0,  -- Wind knockback cooldown tracker
+            -- ENHANCED: Wind pushback animation system
+            pushbackActive = false,    -- Is currently being pushed back
+            pushbackStartX = 0,        -- Starting position for pushback
+            pushbackStartY = 0, 
+            pushbackTargetX = 0,       -- Target position for pushback
+            pushbackTargetY = 0,
+            pushbackProgress = 0,      -- Animation progress (0-1)
+            pushbackFrames = 0,        -- Frames elapsed in pushback
             -- Simple collision avoidance
             lastDirection = 0  -- -1 = up, 1 = down, 0 = none
         }
@@ -2252,19 +2207,13 @@ function Grid:findAvailableStaging(tier)
     return nil  -- Should never happen
 end
 
--- Start marching all creeps to the left
+-- Start marching all creeps with staggered delays to prevent bunching
 function Grid:startCreepMarch()
-    local rallyLineX = 330  -- Dashed line x-coordinate (corrected)
-    
-    for _, creep in ipairs(self.creeps) do
+    print("MARCH: " .. #self.creeps .. " creeps starting march with staggered delays")
+    for i, creep in ipairs(self.creeps) do
         creep.marching = true
         creep.animating = false
-        creep.crossedLine = false  -- Track which creeps have crossed the dashed line
-        
-        -- Ensure all creeps start from behind the dashed line
-        if creep.x <= rallyLineX then
-            creep.x = rallyLineX + 10  -- Position 10 pixels behind the line
-        end
+        creep.marchDelay = math.random(0, 60)  -- Random 0-2 second delay before attacking
     end
 end
 
@@ -2272,74 +2221,145 @@ end
 -- CREEP MOVEMENT HELPER FUNCTIONS  
 -- ============================================================================
 
--- Handle the timing and selection of creeps crossing the rally line
--- Controls the flow of creeps from staging to active combat
--- Only one creep crosses every CREEP_LINE_CROSSING_DELAY frames to prevent clustering
-function Grid:updateCreepLineCrossing()
-    -- Handle dashed line crossing timer
-    self.linesCrossingTimer = self.linesCrossingTimer + 1
-    local shouldSelectCrosser = (self.linesCrossingTimer >= CREEP_LINE_CROSSING_DELAY)
-    
-    -- Select one creep to cross the line this cycle (if timer allows)
-    if shouldSelectCrosser then
-        self.linesCrossingTimer = 0  -- Reset timer
-        
-        local waitingCreeps = {}
-        
-        -- Find all creeps waiting at the front line (only those at the dashed line)
-        for _, creep in ipairs(self.creeps) do
-            if creep.marching and not creep.crossedLine and 
-               creep.x <= CREEP_RALLY_LINE_X + 2 and creep.x >= CREEP_RALLY_LINE_X - 2 then
-                waitingCreeps[#waitingCreeps + 1] = creep
-            end
-        end
-        
-        -- Randomly choose one waiting creep to cross
-        if #waitingCreeps > 0 then
-            local chosenCreep = waitingCreeps[math.random(1, #waitingCreeps)]
-            chosenCreep.crossedLine = true
-        end
-    end
-end
 
--- Update individual creep movement based on crossing status
--- Handles both queueing behavior and active marching toward towers
--- @param creep: Creep object with marching, crossedLine, x, y properties
+-- Simplified creep movement: wait for delay, then move toward nearest tower and attack
 function Grid:updateCreepMovement(creep)
     if not creep.marching then return end
     
-    -- Check if creep hasn't crossed yet
-    if not creep.crossedLine then
-        -- Find queue position and move toward it
-        local targetX = self:findQueuePosition(creep, CREEP_RALLY_LINE_X)
-        local distToTarget = math.abs(creep.x - targetX)
+    -- Update stun counter - creeps can't move while stunned
+    if creep.stunFrames and creep.stunFrames > 0 then
+        creep.stunFrames = creep.stunFrames - 1
+        return  -- Skip movement while stunned
+    end
+    
+    -- Update wind pushback animation (takes priority over normal movement)
+    if creep.pushbackActive then
+        creep.pushbackFrames = creep.pushbackFrames + 1
+        creep.pushbackProgress = creep.pushbackFrames / WIND_PUSHBACK_DURATION
         
-        if distToTarget > 2 then
-            -- Move toward queue position  
-            if creep.x > targetX then
-                creep.x = creep.x - CREEP_MOVE_SPEED
-            else
-                creep.x = creep.x + CREEP_MOVE_SPEED
+        if creep.pushbackProgress >= 1.0 then
+            -- Animation complete - snap to final position
+            creep.x = creep.pushbackTargetX
+            creep.y = creep.pushbackTargetY
+            creep.pushbackActive = false
+        else
+            -- Smooth interpolation with easing (ease-out for natural feel)
+            local t = creep.pushbackProgress
+            local easedT = 1 - (1 - t) * (1 - t)  -- Quadratic ease-out
+            
+            creep.x = creep.pushbackStartX + (creep.pushbackTargetX - creep.pushbackStartX) * easedT
+            creep.y = creep.pushbackStartY + (creep.pushbackTargetY - creep.pushbackStartY) * easedT
+        end
+        return  -- Skip normal movement while being pushed back
+    end
+    
+    -- Wait for march delay before starting to attack
+    if creep.marchDelay > 0 then
+        creep.marchDelay = creep.marchDelay - 1
+        if creep.marchDelay == 0 then
+            print("ATTACK: " .. creep.tier .. " creep delay expired, engaging towers at (" .. math.floor(creep.x) .. "," .. math.floor(creep.y) .. ")")
+        end
+        return  -- Wait at staging position
+    end
+    
+    -- Direct tower targeting: move toward nearest tower and attack
+    self:updateStandAndFightMovement(creep)
+    self:updateCreepSimpleCollision(creep)
+    self:updateCreepAttacks(creep)
+end
+
+-- ENHANCED: "Stand and Fight" movement - creeps target closest tower until death
+-- Creeps must destroy all towers before they can exit the battlefield
+function Grid:updateStandAndFightMovement(creep)
+    -- LOCK-ON LOGIC: Keep current target if it's still alive, otherwise find new one
+    local target = creep.standAndFightTarget
+    if not target or target.hitpoints <= 0 then
+        target = self:findClosestLivingTower(creep.x, creep.y)
+        creep.standAndFightTarget = target
+        if target then
+            print("TARGET: " .. creep.tier .. " creep locked onto tower at (" .. math.floor(target.centerX) .. "," .. math.floor(target.centerY) .. ")")
+        end
+    end
+    
+    if target then
+        -- Move toward the locked target tower
+        local dx = target.centerX - creep.x
+        local dy = target.centerY - creep.y
+        local dist = math.sqrt(dx*dx + dy*dy)
+        
+        -- Only move if not in attack range (varies by creep type)
+        local attackRange = self:getCreepAttackRange(creep)
+        
+        if dist > attackRange then
+            -- Normalize movement direction
+            local moveX = (dx / dist) * CREEP_MARCH_SPEED
+            local moveY = (dy / dist) * CREEP_MARCH_SPEED
+            
+            -- Apply movement
+            creep.x = creep.x + moveX
+            creep.y = creep.y + moveY
+        else
+            -- In attack range - add debug output
+            if math.random(1, 60) == 1 then  -- Occasional debug to avoid spam
+                print("RANGE: " .. creep.tier .. " creep in attack range (dist=" .. math.floor(dist) .. ", range=" .. attackRange .. ")")
             end
         end
-        -- Close enough - stop moving to reduce jitter
+        -- If in range, stop and fight (attack system handles the combat)
     else
-        -- Creep has crossed the line - march left toward towers (slower speed)
+        -- No towers left - exit left side of screen
         creep.x = creep.x - CREEP_MARCH_SPEED
         
-        -- Handle collision with other objects and update attack behavior
-        self:updateCreepSimpleCollision(creep)
-        self:updateCreepAttacks(creep)
+        -- Remove creep when it exits screen
+        if creep.x < -20 then
+            -- Find and remove this creep
+            for i = #self.creeps, 1, -1 do
+                if self.creeps[i] == creep then
+                    table.remove(self.creeps, i)
+                    break
+                end
+            end
+        end
     end
 end
 
+-- ENHANCED: Get attack range for different creep types (accounts for tower radius)
+function Grid:getCreepAttackRange(creep)
+    if creep.tier == "tier1" then
+        -- Tier 1 ranged: Shooting range minus tower radius for better positioning
+        return CREEP_TIER1_RANGE - TOWER_SPRITE_RADIUS
+    elseif creep.tier == "tier2" then
+        -- Tier 2 ranged: Shooting range minus tower radius for better positioning  
+        return CREEP_TIER2_RANGE - TOWER_SPRITE_RADIUS
+    else
+        -- Basic creeps: Must get very close for suicide attacks (tower radius + small buffer)
+        return TOWER_SPRITE_RADIUS + 5  -- 18 + 5 = 23px (much closer than 30px)
+    end
+end
+
+-- Find the closest living tower to a creep
+function Grid:findClosestLivingTower(creepX, creepY)
+    local closestTower = nil
+    local closestDist = math.huge
+    
+    for idx, tower in pairs(self.tierOnePositions) do
+        if tower.hitpoints > 0 then  -- Only consider living towers
+            local dx = tower.centerX - creepX
+            local dy = tower.centerY - creepY
+            local dist = math.sqrt(dx*dx + dy*dy)
+            
+            if dist < closestDist then
+                closestTower = tower
+                closestDist = dist
+            end
+        end
+    end
+    
+    return closestTower
+end
+
 -- Main creep update function - coordinates all creep behavior
--- Orchestrates line crossing timing, movement, combat, and cleanup
 -- Performance: Processes all creeps each frame with optimized sub-functions
 function Grid:updateCreeps()
-    -- Handle line crossing timing and selection
-    self:updateCreepLineCrossing()
-    
     -- Update all individual creep movements and behaviors
     for i = #self.creeps, 1, -1 do
         local creep = self.creeps[i]
@@ -2348,11 +2368,19 @@ function Grid:updateCreeps()
             -- Handle marching creep movement and combat
             self:updateCreepMovement(creep)
             
-            -- Remove creeps that march off left edge of screen
+            -- ENHANCED: Only remove creeps that exit left AFTER all towers are destroyed
             if creep.x < -30 then  -- 30px buffer to prevent visual pop
-                self:checkStagingAvailability(creep.stagingIdx)
-                table.remove(self.creeps, i)
-                self:checkForVictory()  -- Check for victory after removing creep
+                -- Check if any towers remain - only allow exit if none remain
+                local towersRemain = self:findClosestLivingTower(0, 0) ~= nil
+                if not towersRemain then
+                    -- No towers left - allow creep to exit (victory for creeps)
+                    self:checkStagingAvailability(creep.stagingIdx)
+                    table.remove(self.creeps, i)
+                    self:checkForVictory()  -- Check for victory after removing creep
+                else
+                    -- Towers still exist - creep shouldn't be leaving! Move them back to fight
+                    creep.x = 0  -- Reset position to edge of screen to continue fighting
+                end
             end
         elseif creep.animating then
             -- Handle creep spawn and conversion animations
@@ -2365,6 +2393,12 @@ end
 -- Manages both arc movement for converted creeps and linear spawn movement
 -- @param creep: Creep object with animating=true and animation properties
 function Grid:updateCreepAnimation(creep)
+    -- Update stun counter - creeps can't move while stunned (even during animation)
+    if creep.stunFrames and creep.stunFrames > 0 then
+        creep.stunFrames = creep.stunFrames - 1
+        return  -- Skip movement while stunned
+    end
+    
     if creep.converted and creep.arcProgress ~= nil then
         -- Arc movement for converted creeps (twice as fast)
         creep.arcProgress = creep.arcProgress + (CREEP_MOVE_SPEED * 2 / 200)  -- Double speed for converted creeps
@@ -2453,46 +2487,19 @@ function Grid:checkTowerCollision(creep, testX, testY)
     return "clear", nil
 end
 
--- Fluid collision-based movement for creeps - ALWAYS MOVES
+-- Tower-aware collision avoidance - respects stand and fight targeting
 function Grid:updateCreepSimpleCollision(creep)
     if not creep.marching then return end
     
-    -- Store original position to ensure movement
-    local originalX = creep.x
-    local originalY = creep.y
+    -- REMOVED: Legacy "move left toward screen edge" behavior
+    -- NEW: Only handle collision avoidance, don't override tower targeting movement
     
-    -- Primary goal: move left toward screen edge
-    local targetX = creep.x - CREEP_MOVE_SPEED
-    local targetY = creep.y
+    -- Simple boundary check - keep creeps on screen
+    creep.x = math.max(-30, math.min(450, creep.x))
+    creep.y = math.max(0, math.min(240, creep.y))
     
-    -- Check primary movement
-    local collision, tower = self:checkTowerCollision(creep, targetX, targetY)
-    
-    if collision == "clear" then
-        -- Clear path left - move normally and reset avoidance
-        creep.x = targetX
-        creep.y = targetY
-        creep.lastDirection = 0
-    else
-        -- Blocked - find guaranteed movement path
-        local bestX, bestY = self:findGuaranteedMovement(creep, tower)
-        creep.x = bestX
-        creep.y = bestY
-    end
-    
-    -- Apply very loose boundary constraints (prioritize movement over boundaries)
-    creep.x = math.max(-30, math.min(450, creep.x))  -- Very permissive left boundary
-    creep.y = math.max(0, math.min(SCREEN_HEIGHT, creep.y))    -- Keep on screen vertically
-    
-    -- GUARANTEE MOVEMENT: If we didn't move at all, force movement
-    if creep.x == originalX and creep.y == originalY then
-        -- Emergency movement - just move in any direction that works
-        if creep.y > 120 then
-            creep.y = creep.y - CREEP_MOVE_SPEED  -- Move up
-        else
-            creep.y = creep.y + CREEP_MOVE_SPEED  -- Move down
-        end
-    end
+    -- Light collision avoidance with other creeps (optional, minimal)
+    -- This preserves the stand-and-fight movement set by updateStandAndFightMovement
 end
 
 -- Find guaranteed movement around obstacles - NEVER returns original position
@@ -2607,9 +2614,11 @@ function Grid:draw()
     self:drawGrid()
     self:drawBoundaries()
     self:drawBalls()
+    self:drawRainDots()
     self:drawCreeps()
     self:drawTroops()
     self:drawProjectiles()
+    self:drawLightningEffects()
     self:drawAnimations()
     self:drawUI()
     if self.gameState == "gameOver" then
@@ -2756,6 +2765,15 @@ function Grid:drawBalls()
     -- Flying ball
     if self.ball then
         self.bubbleSprites.basic[self.ball.ballType]:draw(self.ball.x - 10, self.ball.y - 10)
+    end
+end
+
+-- Draw all rain dots (towers will render over them)
+function Grid:drawRainDots()
+    for _, dot in ipairs(self.rainDots) do
+        -- Draw all rain dots as 1px black dots (towers render over them)
+        gfx.setColor(gfx.kColorBlack)
+        gfx.fillCircleAtPoint(dot.x, dot.y, 1)
     end
 end
 
@@ -3246,30 +3264,6 @@ end
 
 -- Update tower combat systems (only during creep march phase)
 function Grid:updateTowerCombat()
-    -- TEMPORARY DEBUG: Allow wind towers to fire even when creeps aren't marching
-    if not self:isCreepMarchActive() then 
-        -- Only update wind towers when creeps aren't marching (for debug)
-        for idx, tower in pairs(self.tierOnePositions) do
-            if tower.hitpoints > 0 and tower.ballType == 5 then  -- Only wind towers
-                -- Update attack cooldown
-                tower.lastAttackTime = tower.lastAttackTime + 1
-                
-                -- Check if tower can attack (wind tower special logic)
-                local shouldFire = false
-                if tower.burstActive then
-                    shouldFire = true  -- Always fire during burst
-                elseif tower.lastAttackTime >= WIND_TOWER_COOLDOWN then
-                    shouldFire = true  -- Start new burst after cooldown
-                    tower.lastAttackTime = 0  -- Reset cooldown
-                end
-                
-                if shouldFire then
-                    self:windCreateProjectiles(tower)
-                end
-            end
-        end
-        return  -- Don't process other towers when creeps aren't marching
-    end
     
     -- Update attack cooldowns and process attacks for all Tier 1 towers
     for idx, tower in pairs(self.tierOnePositions) do
@@ -3281,9 +3275,21 @@ function Grid:updateTowerCombat()
             local towerConfig = TOWER_CONFIGS[tower.ballType]
             local cooldown = towerConfig and towerConfig.cooldown or TOWER_ATTACK_COOLDOWN
             
-            -- Special case for wind tower: always fire during active burst
+            -- Special case handling for towers with unique cooldown systems
             local shouldFire = false
-            if tower.ballType == 5 then  -- Wind tower
+            if tower.ballType == 4 then  -- Lightning tower - variable cooldown
+                if tower.lightningSequenceActive then
+                    shouldFire = true  -- Always fire during sequence
+                else
+                    -- Use variable cooldown if set, otherwise use base cooldown
+                    local effectiveCooldown = tower.variableCooldown or cooldown
+                    if tower.lastAttackTime >= effectiveCooldown then
+                        shouldFire = true  -- Start new sequence after variable cooldown
+                        tower.lastAttackTime = 0  -- Reset cooldown
+                        tower.variableCooldown = nil  -- Clear variable cooldown for next cycle
+                    end
+                end
+            elseif tower.ballType == 5 then  -- Wind tower
                 if tower.burstActive then
                     shouldFire = true  -- Always fire during burst
                 elseif tower.lastAttackTime >= cooldown then
@@ -3364,16 +3370,75 @@ function Grid:isTargetInFiringRange(distToTarget, projectileRange)
     return distToTarget <= maxFireRange
 end
 
+-- Generate jagged lightning bolt path from tower to target
+-- Creates 2-3 line segments with random jitter to simulate forked lightning
+-- Path is limited to LIGHTNING_PROJECTILE_RANGE regardless of target distance
+-- @param startX, startY: Tower center position
+-- @param targetX, targetY: Target position
+-- @return pathPoints: Array of {x, y} points defining the lightning path
+function Grid:generateLightningPath(startX, startY, targetX, targetY)
+    local pathPoints = {{x = startX, y = startY}}
+    
+    -- Determine number of segments (2-3 randomly)
+    local numSegments = math.random(LIGHTNING_SEGMENTS_MIN, LIGHTNING_SEGMENTS_MAX)
+    
+    -- Calculate direction to target
+    local dirX = targetX - startX
+    local dirY = targetY - startY
+    local targetDistance = math.sqrt(dirX * dirX + dirY * dirY)
+    
+    -- Normalize direction and limit to bolt range
+    local normalizedDx = dirX / targetDistance
+    local normalizedDy = dirY / targetDistance
+    local actualRange = math.min(targetDistance, LIGHTNING_BOLT_RANGE)
+    
+    -- Calculate actual end point (limited by range)
+    local endX = startX + normalizedDx * actualRange
+    local endY = startY + normalizedDy * actualRange
+    
+    -- Use limited range for path generation
+    local totalDx = endX - startX
+    local totalDy = endY - startY
+    
+    -- Create intermediate points with jitter
+    for i = 1, numSegments - 1 do
+        local progress = i / numSegments
+        
+        -- Base position along straight line
+        local baseX = startX + totalDx * progress
+        local baseY = startY + totalDy * progress
+        
+        -- Add random jitter perpendicular to the main direction
+        local perpAngle = math.atan2(totalDy, totalDx) + math.pi / 2
+        local jitterAmount = (math.random() - 0.5) * LIGHTNING_JITTER_RANGE
+        local jitterX = math.cos(perpAngle) * jitterAmount
+        local jitterY = math.sin(perpAngle) * jitterAmount
+        
+        pathPoints[#pathPoints + 1] = {
+            x = baseX + jitterX,
+            y = baseY + jitterY
+        }
+    end
+    
+    -- Final point is the range-limited end point
+    pathPoints[#pathPoints + 1] = {x = endX, y = endY}
+    
+    return pathPoints
+end
+
 -- Process attack for a specific tower
 function Grid:processTowerAttack(tower)
     if tower.ballType == 1 then  -- Flame tower
         self:flameCreateProjectiles(tower)
+    elseif tower.ballType == 2 then  -- Rain tower (Water)
+        self:rainCreateDots(tower)
     elseif tower.ballType == 3 then  -- Tremor tower (Earth)
         self:tremorCreateProjectiles(tower)
+    elseif tower.ballType == 4 then  -- Lightning tower
+        self:lightningCreateProjectiles(tower)
     elseif tower.ballType == 5 then  -- Wind tower
         self:windCreateProjectiles(tower)
     end
-    -- Other tower types will be added later
 end
 
 -- Create flame tower projectiles with rotation tracking
@@ -3438,6 +3503,34 @@ function Grid:flameCreateProjectiles(tower)
         }
     end
 end
+
+-- Create rain tower damage dots in random positions around tower
+function Grid:rainCreateDots(tower)
+    -- Only rain towers use this system
+    if tower.ballType ~= 2 then return end
+    
+    -- Rain towers always spawn dots - no range or target checking needed
+    for i = 1, RAIN_DOTS_PER_FRAME do
+        -- Generate random position within the ring (between inner and outer radius)
+        local angle = math.random() * 2 * math.pi
+        -- For ring distribution: distance between inner and outer radius
+        local ringWidth = RAIN_OUTER_RADIUS - RAIN_INNER_RADIUS
+        local distance = RAIN_INNER_RADIUS + math.sqrt(math.random()) * ringWidth
+        
+        local dotX = tower.centerX + math.cos(angle) * distance
+        local dotY = tower.centerY + math.sin(angle) * distance
+        
+        -- Create rain dot
+        self.rainDots[#self.rainDots + 1] = {
+            x = dotX,
+            y = dotY,
+            damage = RAIN_DOT_DAMAGE,
+            lifetime = RAIN_DOT_LIFETIME,
+            spawnFrame = self.frameCounter
+        }
+    end
+end
+
 
 -- Create tremor tower projectiles with precise arc pattern
 function Grid:tremorCreateProjectiles(tower)
@@ -3515,11 +3608,9 @@ function Grid:windCreateProjectiles(tower)
         -- Find nearest creep within range to start burst
         local target = self:findNearestCreepInRange(tower.centerX, tower.centerY, WIND_TOWER_RANGE)
         
-        -- TEMPORARY DEBUG: Always fire toward right side if no target
         if not target then 
             tower.currentTarget = nil
-            -- Create fake target for debugging
-            target = {x = tower.centerX + 100, y = tower.centerY}
+            return  -- Don't fire if no target in range
         end
         
         -- Always update to newest target
@@ -3534,11 +3625,10 @@ function Grid:windCreateProjectiles(tower)
         -- Calculate distance to target using shared helper
         local distToTarget = self:calculateTargetDistance(tower, target)
         
-        -- TEMPORARY DEBUG: Skip range check
         -- Only start burst if target is within firing range
-        -- if not self:isTargetInFiringRange(distToTarget, WIND_PROJECTILE_RANGE) then
-        --     return  -- Don't fire if creep is too far away
-        -- end
+        if not self:isTargetInFiringRange(distToTarget, WIND_PROJECTILE_RANGE) then
+            return  -- Don't fire if creep is too far away
+        end
         
         -- Update tower rotation using shared helper
         self:updateTowerRotation(tower, tower.targetAngle, WIND_ROTATION_SPEED)
@@ -3593,6 +3683,170 @@ function Grid:windCreateProjectiles(tower)
     end
 end
 
+-- Create instant lightning bolt effects
+function Grid:lightningCreateProjectiles(tower)
+    -- Only lightning towers use this system
+    if tower.ballType ~= 4 then return end
+    
+    -- Initialize lightning state if not already set
+    if not tower.lightningSequenceActive then
+        tower.lightningSequenceActive = false
+        tower.lightningSequenceProgress = 0
+        tower.lightningBoltsFired = 0
+    end
+    
+    -- Check if we should start a new lightning sequence
+    if not tower.lightningSequenceActive then
+        -- ENHANCED: Find priority target (Tier 2 > Tier 1 > Basic) within range
+        local target = self:findPriorityTargetForLightning(tower.centerX, tower.centerY, LIGHTNING_TOWER_RANGE)
+        
+        if not target then 
+            tower.currentTarget = nil
+            return  -- Don't fire if no target in range
+        end
+        
+        -- Always update to newest target
+        if tower.currentTarget ~= target then
+            tower.currentTarget = target
+            -- Calculate new target angle
+            local dx = target.x - tower.centerX
+            local dy = target.y - tower.centerY
+            tower.targetAngle = math.atan2(dy, dx)
+        end
+        
+        -- Calculate distance to target using shared helper
+        local distToTarget = self:calculateTargetDistance(tower, target)
+        
+        -- Only fire if target is within actual bolt range (not the multiplied firing range)
+        if distToTarget > LIGHTNING_BOLT_RANGE then
+            return  -- Don't fire if target is beyond bolt reach
+        end
+        
+        -- Update tower rotation using shared helper
+        self:updateTowerRotation(tower, tower.targetAngle, WIND_ROTATION_SPEED)
+        
+        -- Start new lightning sequence
+        tower.lightningSequenceActive = true
+        tower.lightningSequenceProgress = 0
+        tower.lightningBoltsFired = 0
+        tower.currentTarget = target  -- Lock target for entire sequence
+    end
+    
+    -- Continue lightning sequence if active
+    if tower.lightningSequenceActive then
+        tower.lightningSequenceProgress = tower.lightningSequenceProgress + 1
+        
+        -- Fire bolts at intervals during sequence (frames 1 and 5, 4 frames apart)
+        local boltFrame = tower.lightningSequenceProgress
+        if (boltFrame == 1 or boltFrame == 5) and tower.lightningBoltsFired < LIGHTNING_BOLTS_PER_SEQUENCE then
+            tower.lightningBoltsFired = tower.lightningBoltsFired + 1
+            
+            -- Generate new jagged path for this bolt
+            local lightningPath = self:generateLightningPath(tower.centerX, tower.centerY, tower.currentTarget.x, tower.currentTarget.y)
+            
+            -- Create instant lightning effect
+            self.lightningEffects[#self.lightningEffects + 1] = {
+                path = lightningPath,
+                lifetime = LIGHTNING_BOLT_LIFETIME,
+                damage = LIGHTNING_BOLT_DAMAGE,
+                targetCreep = tower.currentTarget,
+                towerX = tower.centerX,
+                towerY = tower.centerY
+            }
+            
+            -- Apply instant damage along bolt path
+            self:applyLightningDamage(lightningPath, LIGHTNING_BOLT_DAMAGE)
+        end
+        
+        -- End lightning sequence after duration (8 frames total)
+        if tower.lightningSequenceProgress >= LIGHTNING_SEQUENCE_DURATION then  
+            tower.lightningSequenceActive = false
+            tower.lightningSequenceProgress = 0
+            tower.lightningBoltsFired = 0
+            tower.currentTarget = nil
+            
+            -- Variable cooldown: 50% to 150% of base cooldown (3 to 9 frames)
+            local minCooldown = math.ceil(LIGHTNING_TOWER_COOLDOWN * 0.5)   -- 50% = 3 frames
+            local maxCooldown = math.ceil(LIGHTNING_TOWER_COOLDOWN * 1.5)   -- 150% = 9 frames
+            local randomCooldown = math.random(minCooldown, maxCooldown)
+            
+            tower.lastAttackTime = 0  -- Reset cooldown timer
+            tower.variableCooldown = randomCooldown  -- Store the random cooldown for this cycle
+        end
+    end
+end
+
+-- Apply instant damage along lightning bolt path
+-- Checks for creep collisions along the entire jagged lightning path
+function Grid:applyLightningDamage(lightningPath, damage)
+    if #lightningPath < 2 then return end
+    
+    -- Check each line segment of the lightning path
+    for i = 1, #lightningPath - 1 do
+        local startPoint = lightningPath[i]
+        local endPoint = lightningPath[i + 1]
+        
+        -- Check collision with each creep along this line segment
+        for _, creep in ipairs(self.creeps) do
+            if creep.marching then  -- Only hit marching creeps
+                -- Calculate distance from creep to line segment
+                local distToSegment = self:pointToLineDistance(
+                    creep.x, creep.y,
+                    startPoint.x, startPoint.y,
+                    endPoint.x, endPoint.y
+                )
+                
+                -- Check if creep is close enough to be hit by lightning
+                local creepSize = creep.tier == "basic" and CREEP_SIZE or 
+                                 creep.tier == "tier1" and CREEP_SIZE + 1 or 
+                                 creep.tier == "tier2" and CREEP_SIZE + 5 or CREEP_SIZE
+                
+                if distToSegment <= creepSize + 2 then  -- 2px lightning width
+                    -- Apply damage to creep
+                    creep.hitpoints = creep.hitpoints - damage
+                    
+                    -- Remove dead creeps
+                    if creep.hitpoints <= 0 then
+                        -- Mark for removal (will be cleaned up in update cycle)
+                        creep.dead = true
+                    end
+                    
+                    -- Lightning hits only one creep per bolt (break after first hit)
+                    return
+                end
+            end
+        end
+    end
+end
+
+-- Calculate distance from point to line segment
+-- Returns the shortest distance from point (px, py) to line segment (x1,y1)-(x2,y2)
+function Grid:pointToLineDistance(px, py, x1, y1, x2, y2)
+    local dx = x2 - x1
+    local dy = y2 - y1
+    local lengthSquared = dx * dx + dy * dy
+    
+    if lengthSquared == 0 then
+        -- Line segment is a point
+        local dpx = px - x1
+        local dpy = py - y1
+        return math.sqrt(dpx * dpx + dpy * dpy)
+    end
+    
+    -- Calculate projection of point onto line
+    local t = ((px - x1) * dx + (py - y1) * dy) / lengthSquared
+    t = math.max(0, math.min(1, t))  -- Clamp to line segment
+    
+    -- Find closest point on line segment
+    local closestX = x1 + t * dx
+    local closestY = y1 + t * dy
+    
+    -- Return distance to closest point
+    local dpx = px - closestX
+    local dpy = py - closestY
+    return math.sqrt(dpx * dpx + dpy * dpy)
+end
+
 -- Find nearest creep within range of tower
 function Grid:findNearestCreepInRange(towerX, towerY, range)
     local nearestCreep = nil
@@ -3614,6 +3868,46 @@ function Grid:findNearestCreepInRange(towerX, towerY, range)
     return nearestCreep
 end
 
+-- ENHANCED: Lightning tower smart targeting with priority weights
+-- Prioritizes Tier 2 > Tier 1 > Basic creeps, then by distance within same tier
+-- @param towerX, towerY: Tower center position
+-- @param range: Detection range for targeting
+-- @return bestTarget: Highest priority creep in range, or nil if none found
+function Grid:findPriorityTargetForLightning(towerX, towerY, range)
+    local bestTarget = nil
+    local bestScore = -1
+    
+    for _, creep in ipairs(self.creeps) do
+        if creep.marching then  -- Only target marching creeps
+            local dx = creep.x - towerX
+            local dy = creep.y - towerY
+            local dist = math.sqrt(dx*dx + dy*dy)
+            
+            if dist <= range then
+                -- Calculate priority weight based on creep tier
+                local weight = LIGHTNING_TARGET_WEIGHT_BASIC  -- Default to basic
+                if creep.tier == "tier1" then
+                    weight = LIGHTNING_TARGET_WEIGHT_TIER1
+                elseif creep.tier == "tier2" then
+                    weight = LIGHTNING_TARGET_WEIGHT_TIER2
+                end
+                
+                -- Score = weight - distance (higher weight + closer = better score)
+                -- Distance normalized to 0-1 range so weight dominates
+                local normalizedDist = dist / range
+                local score = weight - normalizedDist
+                
+                if score > bestScore then
+                    bestTarget = creep
+                    bestScore = score
+                end
+            end
+        end
+    end
+    
+    return bestTarget
+end
+
 -- Predict where a creep will be based on its movement
 function Grid:predictCreepPosition(creep)
     -- Simple prediction: assume creep continues current movement
@@ -3622,47 +3916,179 @@ function Grid:predictCreepPosition(creep)
     local predictedY = creep.y
     
     if creep.marching then
-        if creep.crossedLine then
-            -- Creep is marching left
-            predictedX = creep.x - (CREEP_MOVE_SPEED * futureFrames)
-        else
-            -- Creep is moving to queue position - predict based on current target
-            if creep.targetX and creep.targetY then
-                local dx = creep.targetX - creep.x
-                local dy = creep.targetY - creep.y
-                local dist = math.sqrt(dx*dx + dy*dy)
-                
-                if dist > 0 then
-                    local vx = (dx/dist) * CREEP_MOVE_SPEED
-                    local vy = (dy/dist) * CREEP_MOVE_SPEED
-                    predictedX = creep.x + (vx * futureFrames)
-                    predictedY = creep.y + (vy * futureFrames)
-                end
-            end
+        -- Simplified: if not waiting for delay, predict movement toward towers
+        if creep.marchDelay <= 0 then
+            -- Creep is moving toward towers at CREEP_MARCH_SPEED
+            predictedX = creep.x - (CREEP_MARCH_SPEED * futureFrames)
         end
+        -- If still waiting (marchDelay > 0), stay at current position
     end
     
     return predictedX, predictedY
 end
 
--- Update creep attacks on towers
+-- ENHANCED: Update creep attacks on towers (supports Tier 1+2 ranged combat)
 function Grid:updateCreepAttacks(creep)
+    if creep.tier == "tier1" then
+        -- TIER 1: Aggressive close-range shooting
+        self:updateTier1RangedCombat(creep)
+    elseif creep.tier == "tier2" then
+        -- TIER 2: Cautious long-range shooting
+        self:updateTier2RangedCombat(creep)
+    else
+        -- BASIC: Traditional suicide attacks
+        self:updateBasicCreepAttacks(creep)
+    end
+end
+
+-- Traditional suicide attacks for Basic creeps only
+function Grid:updateBasicCreepAttacks(creep)
     -- Update attack cooldown
     creep.lastAttackTime = creep.lastAttackTime + 1
     
     -- Check if creep can attack
     if creep.lastAttackTime >= CREEP_ATTACK_COOLDOWN then
-        -- Find nearest tower in range
-        local target = self:findNearestTowerInRange(creep.x, creep.y, CREEP_ATTACK_RANGE)
-        if target then
-            -- Attack the tower
-            target.hitpoints = target.hitpoints - CREEP_ATTACK_DAMAGE
-            creep.lastAttackTime = 0  -- Reset cooldown
+        -- Use the locked stand-and-fight target instead of finding a new one
+        local target = creep.standAndFightTarget
+        if target and target.hitpoints > 0 then
+            -- Check if target is in attack range
+            local dx = target.centerX - creep.x
+            local dy = target.centerY - creep.y
+            local dist = math.sqrt(dx*dx + dy*dy)
             
-            -- Check if tower is destroyed
-            if target.hitpoints <= 0 then
-                self:destroyTower(target)
+            if dist <= CREEP_ATTACK_RANGE then
+                -- Attack the locked tower
+                target.hitpoints = target.hitpoints - CREEP_BASIC_DAMAGE
+                creep.lastAttackTime = 0  -- Reset cooldown
+                print("SUICIDE: Basic creep attacked tower! Damage=" .. CREEP_BASIC_DAMAGE .. ", HP left=" .. target.hitpoints)
+                
+                -- Check if tower is destroyed
+                if target.hitpoints <= 0 then
+                    print("DESTROY: Tower destroyed by basic creep!")
+                    self:destroyTower(target)
+                end
+                
+                -- SUICIDE: Remove the creep after attack (suicide behavior)
+                creep.hitpoints = 0  -- Mark for removal by main update loop
             end
+        end
+    end
+end
+
+-- ENHANCED: Tier 1 ranged combat (aggressive, close-range, balanced vs old suicide)
+function Grid:updateTier1RangedCombat(creep)
+    -- Initialize ranged combat properties if needed
+    if not creep.lastRangedAttack then
+        creep.lastRangedAttack = 0
+        creep.kiteTarget = nil
+        creep.kiteDirection = 0  -- -1 = move away, 0 = maintain, 1 = move closer
+    end
+    
+    -- Update ranged attack cooldown
+    creep.lastRangedAttack = creep.lastRangedAttack + 1
+    
+    -- ENHANCED: Use "stand and fight" target, or find closest if none set
+    local target = creep.standAndFightTarget
+    if not target or target.hitpoints <= 0 then
+        target = self:findClosestLivingTower(creep.x, creep.y)
+    end
+    
+    -- Only shoot if target is in range (account for tower radius)
+    if target then
+        local dx = target.centerX - creep.x
+        local dy = target.centerY - creep.y
+        local distToTarget = math.sqrt(dx*dx + dy*dy)
+        -- Effective range: shooting range minus tower radius (edge-to-center distance)
+        local effectiveRange = CREEP_TIER1_RANGE - TOWER_SPRITE_RADIUS
+        if distToTarget > effectiveRange then
+            target = nil  -- Out of range, can't shoot
+        end
+    end
+    
+    if target then
+        -- STAND AND FIGHT: No kiting, just shoot when in range and ready
+        if creep.lastRangedAttack >= CREEP_TIER1_COOLDOWN then
+            -- Calculate projectile direction toward tower
+            local dx = target.centerX - creep.x
+            local dy = target.centerY - creep.y
+            local dist = math.sqrt(dx*dx + dy*dy)
+            
+            -- Create projectile toward tower
+            local vx = (dx / dist) * CREEP_TIER1_PROJECTILE_SPEED
+            local vy = (dy / dist) * CREEP_TIER1_PROJECTILE_SPEED
+            
+            self.projectiles[#self.projectiles + 1] = {
+                x = creep.x,
+                y = creep.y,
+                vx = vx,
+                vy = vy,
+                damage = CREEP_TIER1_DAMAGE,
+                creepType = "tier1",  -- Mark as creep projectile
+                maxRange = CREEP_TIER1_RANGE,
+                startX = creep.x,
+                startY = creep.y
+            }
+            
+            creep.lastRangedAttack = 0  -- Reset cooldown
+            print("SHOOT: Tier1 creep fired projectile at tower")
+        end
+    end
+end
+
+-- ENHANCED: Tier 2 ranged combat with "stand and fight" behavior
+function Grid:updateTier2RangedCombat(creep)
+    -- Initialize ranged combat properties if needed
+    if not creep.lastRangedAttack then
+        creep.lastRangedAttack = 0
+    end
+    
+    -- Update ranged attack cooldown
+    creep.lastRangedAttack = creep.lastRangedAttack + 1
+    
+    -- ENHANCED: Use "stand and fight" target, or find closest if none set
+    local target = creep.standAndFightTarget
+    if not target or target.hitpoints <= 0 then
+        target = self:findClosestLivingTower(creep.x, creep.y)
+    end
+    
+    -- Only shoot if target is in range (account for tower radius)
+    if target then
+        local dx = target.centerX - creep.x
+        local dy = target.centerY - creep.y
+        local distToTarget = math.sqrt(dx*dx + dy*dy)
+        -- Effective range: shooting range minus tower radius (edge-to-center distance)
+        local effectiveRange = CREEP_TIER2_RANGE - TOWER_SPRITE_RADIUS
+        if distToTarget > effectiveRange then
+            target = nil  -- Out of range, can't shoot
+        end
+    end
+    
+    if target then
+        -- STAND AND FIGHT: No kiting, just shoot when in range and ready
+        if creep.lastRangedAttack >= CREEP_TIER2_COOLDOWN then
+            -- Calculate projectile direction toward tower
+            local dx = target.centerX - creep.x
+            local dy = target.centerY - creep.y
+            local dist = math.sqrt(dx*dx + dy*dy)
+            
+            -- Create projectile toward tower
+            local vx = (dx / dist) * CREEP_TIER2_PROJECTILE_SPEED
+            local vy = (dy / dist) * CREEP_TIER2_PROJECTILE_SPEED
+            
+            self.projectiles[#self.projectiles + 1] = {
+                x = creep.x,
+                y = creep.y,
+                vx = vx,
+                vy = vy,
+                damage = CREEP_TIER2_DAMAGE,
+                creepType = "tier2",  -- Mark as creep projectile
+                maxRange = CREEP_TIER2_RANGE,
+                startX = creep.x,
+                startY = creep.y
+            }
+            
+            creep.lastRangedAttack = 0  -- Reset cooldown
+            print("SHOOT: Tier2 creep fired projectile at tower")
         end
     end
 end
@@ -3798,11 +4224,78 @@ function Grid:updateProjectiles()
         if distTraveled >= maxRange then
             table.remove(self.projectiles, i)
         else
-            -- Check collision with creeps (most expensive check last)
-            self:checkProjectileCreepCollision(projectile, i)
+            -- Check collision based on projectile type
+            if projectile.creepType then
+                -- Creep projectile - check collision with towers
+                self:checkCreepProjectileTowerCollision(projectile, i)
+            else
+                -- Tower projectile - check collision with creeps
+                self:checkProjectileCreepCollision(projectile, i)
+            end
         end
         
         ::continue::
+    end
+end
+
+-- Update rain dots: handle lifetime, collision detection, and cleanup
+function Grid:updateRainDots()
+    for i = #self.rainDots, 1, -1 do
+        local dot = self.rainDots[i]
+        
+        -- Check if dot has expired (5 frames)
+        if (self.frameCounter - dot.spawnFrame) >= RAIN_DOT_LIFETIME then
+            table.remove(self.rainDots, i)
+            goto continue
+        end
+        
+        -- Check collision with all creeps
+        for j = #self.creeps, 1, -1 do
+            local creep = self.creeps[j]
+            
+            -- Calculate distance between dot and creep
+            local dx = dot.x - creep.x
+            local dy = dot.y - creep.y
+            local distance = math.sqrt(dx*dx + dy*dy)
+            
+            -- Check if creep is touching the dot (use creep size for collision radius)
+            if distance <= creep.size then
+                -- Deal damage to creep
+                creep.hitpoints = creep.hitpoints - dot.damage
+                
+                -- Remove the dot (it gets consumed on hit)
+                table.remove(self.rainDots, i)
+                
+                -- Check if creep is dead
+                if creep.hitpoints <= 0 then
+                    -- Free up staging position if this was the last creep there
+                    self:checkStagingAvailability(creep.stagingIdx)
+                    table.remove(self.creeps, j)
+                    
+                    -- Check for victory after removing creep
+                    self:checkForVictory()
+                end
+                
+                goto continue  -- Dot is consumed, move to next dot
+            end
+        end
+        
+        ::continue::
+    end
+end
+
+-- Update lightning effects: handle lifetime and cleanup
+function Grid:updateLightningEffects()
+    for i = #self.lightningEffects, 1, -1 do
+        local effect = self.lightningEffects[i]
+        
+        -- Decrease lifetime each frame
+        effect.lifetime = effect.lifetime - 1
+        
+        -- Remove expired effects
+        if effect.lifetime <= 0 then
+            table.remove(self.lightningEffects, i)
+        end
     end
 end
 
@@ -3826,6 +4319,76 @@ function Grid:checkProjectileCreepCollision(projectile, projectileIndex)
                 -- Deal damage to creep
                 creep.hitpoints = creep.hitpoints - projectile.damage
                 
+                -- Apply special effects based on projectile type
+                if projectile.towerType == 3 then  -- Tremor tower - earthquake wave stun
+                    creep.stunFrames = 12  -- 12 frames of movement disable
+                elseif projectile.towerType == 5 then  -- Wind tower - ENHANCED pushback
+                    -- Check if pushback is on cooldown and not already being pushed
+                    if not creep.pushbackActive and 
+                       (not creep.lastKnockbackFrame or (self.frameCounter - creep.lastKnockbackFrame) >= WIND_PUSHBACK_COOLDOWN) then
+                        
+                        -- Calculate movement direction for pushback
+                        local movementDx, movementDy = 0, 0
+                        
+                        if creep.marching and creep.marchDelay <= 0 then
+                            -- Active marching creeps move toward towers (left)
+                            movementDx = -1
+                            movementDy = 0
+                        elseif creep.marching and creep.marchDelay > 0 then
+                            -- Waiting creeps stay in place
+                            movementDx = 0
+                            movementDy = 0
+                        elseif creep.animating and not creep.converted then
+                            -- Spawning creeps move toward target
+                            local dx = creep.targetX - creep.x
+                            local dy = creep.targetY - creep.y
+                            local dist = math.sqrt(dx*dx + dy*dy)
+                            if dist > 0 then
+                                movementDx = dx / dist
+                                movementDy = dy / dist
+                            end
+                        end
+                        
+                        -- Start pushback animation with 3x distance (27px total)
+                        if movementDx ~= 0 or movementDy ~= 0 then
+                            -- Calculate target position with boundary checking
+                            local targetX = creep.x - movementDx * WIND_PUSHBACK_DISTANCE
+                            local targetY = creep.y - movementDy * WIND_PUSHBACK_DISTANCE
+                            
+                            -- Clamp to screen boundaries to prevent units going off-screen
+                            targetX = math.max(10, math.min(SCREEN_WIDTH - 10, targetX))
+                            targetY = math.max(10, math.min(SCREEN_HEIGHT - 10, targetY))
+                            
+                            creep.pushbackActive = true
+                            creep.pushbackStartX = creep.x
+                            creep.pushbackStartY = creep.y
+                            creep.pushbackTargetX = targetX
+                            creep.pushbackTargetY = targetY
+                            creep.pushbackProgress = 0
+                            creep.pushbackFrames = 0
+                            creep.lastKnockbackFrame = self.frameCounter
+                        end
+                    end
+                else
+                    -- Initialize properties for existing creeps if not present
+                    if not creep.stunFrames then
+                        creep.stunFrames = 0
+                    end
+                    if not creep.lastKnockbackFrame then
+                        creep.lastKnockbackFrame = 0
+                    end
+                    -- ENHANCED: Initialize pushback animation properties
+                    if creep.pushbackActive == nil then
+                        creep.pushbackActive = false
+                        creep.pushbackStartX = 0
+                        creep.pushbackStartY = 0
+                        creep.pushbackTargetX = 0
+                        creep.pushbackTargetY = 0
+                        creep.pushbackProgress = 0
+                        creep.pushbackFrames = 0
+                    end
+                end
+                
                 -- Remove projectile if it's not piercing
                 if not isPiercing then
                     table.remove(self.projectiles, projectileIndex)
@@ -3848,6 +4411,64 @@ function Grid:checkProjectileCreepCollision(projectile, projectileIndex)
                 end
             end
         end
+    end
+end
+
+-- Check collision between creep projectiles and towers
+function Grid:checkCreepProjectileTowerCollision(projectile, projectileIndex)
+    -- Check all grid cells for tower bubbles
+    for idx = 1, #self.cells do
+        local cell = self.cells[idx]
+        if cell and cell.occupied and cell.ballType and cell.ballType >= 1 and cell.ballType <= 5 then
+            -- Get tower position from positions array
+            local towerPos = self.positions[idx]
+            if towerPos then
+                -- Calculate distance between projectile and tower center
+                local dx = projectile.x - towerPos.x
+                local dy = projectile.y - towerPos.y
+                local distance = math.sqrt(dx*dx + dy*dy)
+                
+                -- Tower collision radius (similar to creep size)
+                local towerRadius = 10  -- Radius for tower collision detection
+                
+                -- Check if projectile hits the tower
+                if distance <= towerRadius then
+                    -- Destroy the tower by clearing the cell
+                    cell.ballType = nil
+                    cell.occupied = false
+                    cell.tier = nil
+                    
+                    -- Remove the projectile
+                    table.remove(self.projectiles, projectileIndex)
+                    
+                    print("COMBAT: Tower destroyed by creep projectile!")
+                    
+                    -- Check for game over (all towers destroyed)
+                    self:checkForGameOver()
+                    
+                    return  -- Projectile hit something, stop processing
+                end
+            end
+        end
+    end
+end
+
+-- Check if all towers are destroyed (game over condition)
+function Grid:checkForGameOver()
+    -- Count remaining towers
+    local towerCount = 0
+    for idx = 1, #self.cells do
+        local cell = self.cells[idx]
+        if cell and cell.occupied and cell.ballType and cell.ballType >= 1 and cell.ballType <= 5 then
+            towerCount = towerCount + 1
+        end
+    end
+    
+    -- If no towers remain, trigger game over
+    if towerCount == 0 then
+        print("GAME OVER: All towers destroyed!")
+        -- Could add game over state here
+        -- For now, just print message
     end
 end
 
@@ -3924,9 +4545,31 @@ function Grid:drawProjectiles()
             elseif projectile.towerType == 5 then  -- Wind tower
                 gfx.fillCircleAtPoint(projectile.x, projectile.y, 1)  -- Same size as flame
             end
-            -- Other tower types can have different projectile visuals
         end
     end
+end
+
+-- Draw lightning bolt effects as jagged lines
+function Grid:drawLightningEffects()
+    gfx.setColor(gfx.kColorBlack)
+    gfx.setLineWidth(2)  -- Slightly thick lines for visibility
+    
+    for _, effect in ipairs(self.lightningEffects) do
+        local path = effect.path
+        
+        -- Draw each line segment of the jagged lightning path
+        for i = 1, #path - 1 do
+            local startPoint = path[i]
+            local endPoint = path[i + 1]
+            
+            gfx.drawLine(
+                startPoint.x, startPoint.y,
+                endPoint.x, endPoint.y
+            )
+        end
+    end
+    
+    gfx.setLineWidth(1)  -- Reset line width
 end
 
 -- Handle troop shot counting and cycle management
