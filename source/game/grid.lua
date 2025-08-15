@@ -48,7 +48,7 @@ local CREEP_STAGING_POSITIONS <const> = {
     (11-1) * 20 + 18   -- Row 11, Col 18 (grid index 218)
 }
 local CREEP_SPAWN_OFFSET <const> = 100  -- Pixels to right of staging spot
-local CREEP_MOVE_SPEED <const> = 2      -- Pixels per frame movement speed
+local CREEP_MOVE_SPEED <const> = 3      -- Pixels per frame movement speed (increased by 50%)
 local CREEP_MARCH_SPEED <const> = 0.75  -- Pixels per frame when marching toward towers (1.5x faster)
 local CREEP_SIZE <const> = 3            -- Collision radius (4px sprite with 1px transparent edge)
 local CREEP_RALLY_LINE_X <const> = 330  -- X coordinate of dashed line where creeps queue
@@ -63,21 +63,58 @@ local CREEP_ATTACK_RANGE <const> = 30   -- Range for basic creep suicide attacks
 local CREEP_BASIC_DAMAGE <const> = 15   -- Basic creep suicide damage
 local CREEP_ATTACK_COOLDOWN <const> = 25 -- Frames between basic creep attacks
 
+-- Basic creep charge system (activate within 20px of target)
+local CREEP_CHARGE_RANGE <const> = 20   -- Range to activate charge (outer edge collision)
+local CREEP_CHARGE_SPEED <const> = 6    -- 200% of normal speed (3 * 2 = 6)
+
+-- Zone-based targeting system (3 vertical slices of the battlefield)
+local ZONE_1_MIN_X <const> = 266        -- Zone 1: closest to creep rally (rightmost)
+local ZONE_2_MIN_X <const> = 133        -- Zone 2: middle zone
+-- Zone 3 is everything below ZONE_2_MIN_X (leftmost, furthest from creep rally)
+
+-- Fixed rally positions for each creep tier
+local BASIC_RALLY_ROWS <const> = {3, 5, 7, 9, 11}     -- Basic creeps rally to rows 3,5,7,9,11 at col 18
+local TIER1_RALLY_ROWS <const> = {4, 6, 8, 10, 12}    -- Tier 1 creeps rally to rows 4,6,8,10,12 at col 18  
+local TIER2_RALLY_ROWS <const> = {3, 5, 7, 9, 11}     -- Tier 2 creeps rally to rows 3,5,7,9,11 at col 19
+
+-- Convert row numbers to grid indices for each tier
+local BASIC_RALLY_POSITIONS <const> = {
+    (3-1) * 20 + 18,   -- Row 3, Col 18
+    (5-1) * 20 + 18,   -- Row 5, Col 18
+    (7-1) * 20 + 18,   -- Row 7, Col 18
+    (9-1) * 20 + 18,   -- Row 9, Col 18
+    (11-1) * 20 + 18   -- Row 11, Col 18
+}
+local TIER1_RALLY_POSITIONS <const> = {
+    (4-1) * 20 + 18,   -- Row 4, Col 18
+    (6-1) * 20 + 18,   -- Row 6, Col 18
+    (8-1) * 20 + 18,   -- Row 8, Col 18
+    (10-1) * 20 + 18,  -- Row 10, Col 18
+    (12-1) * 20 + 18   -- Row 12, Col 18
+}
+local TIER2_RALLY_POSITIONS <const> = {
+    (3-1) * 20 + 19,   -- Row 3, Col 19
+    (5-1) * 20 + 19,   -- Row 5, Col 19
+    (7-1) * 20 + 19,   -- Row 7, Col 19
+    (9-1) * 20 + 19,   -- Row 9, Col 19
+    (11-1) * 20 + 19   -- Row 11, Col 19
+}
+
 -- Tier 1 ranged combat system (aggressive, close-range, balanced vs old suicide)
-local CREEP_TIER1_RANGE <const> = 100   -- Tier 1 shooting range (shorter than Tier 2)
+local CREEP_TIER1_RANGE <const> = 80    -- Tier 1 shooting range (reduced to fire just before stopping)
 local CREEP_TIER1_DAMAGE <const> = 20   -- Tier 1 ranged damage per shot (balanced for sustained DPS)
 local CREEP_TIER1_COOLDOWN <const> = 90 -- Tier 1 shot cooldown (1.5 seconds vs Tier 2's 1 sec)
 local CREEP_TIER1_MIN_DISTANCE <const> = 20 -- Tier 1s get twice as close (was 40 for Tier 2)
 
 -- Tier 2 ranged combat system (cautious, long-range)
-local CREEP_TIER2_RANGE <const> = 150   -- Tier 2 shooting range
+local CREEP_TIER2_RANGE <const> = 110   -- Tier 2 shooting range (reduced to fire just before stopping)
 local CREEP_TIER2_DAMAGE <const> = 25   -- Tier 2 ranged damage per shot
 local CREEP_TIER2_COOLDOWN <const> = 60 -- Tier 2 shot cooldown (1 shot/second)
 local CREEP_TIER2_MIN_DISTANCE <const> = 40 -- Minimum distance Tier 2s maintain from targets
 
 -- Creep projectile constants
-local CREEP_TIER1_PROJECTILE_SPEED <const> = 3.0 -- Tier 1 projectile speed
-local CREEP_TIER2_PROJECTILE_SPEED <const> = 2.5 -- Tier 2 projectile speed (slightly slower)
+local CREEP_TIER1_PROJECTILE_SPEED <const> = 4.0 -- Tier 1 projectile speed (increased for visibility)
+local CREEP_TIER2_PROJECTILE_SPEED <const> = 3.5 -- Tier 2 projectile speed (increased for visibility)
 
 -- Lightning tower smart targeting weights (priority system)
 local LIGHTNING_TARGET_WEIGHT_TIER2 <const> = 100  -- Highest priority: Tier 2 creeps
@@ -934,6 +971,7 @@ function Grid:handleBallLanding()
         -- Handle troop spawning and shot counting (happens on every shot)
         self:handleTroopShotCounting()
         self:spawnTroopsForShot()
+        
     else
         -- Failed placement - trigger game over sequence
         self:startGameOverSequence()
@@ -1106,7 +1144,19 @@ function Grid:updateAnimations()
                     centerX = anim.endX,
                     centerY = anim.endY,
                     sprite = anim.sprite,
-                    pattern = anim.pattern
+                    pattern = anim.pattern,
+                    ballType = 4,  -- All Tier 2 towers are Lightning towers
+                    hitpoints = TOWER_HP,
+                    maxHitpoints = TOWER_HP,
+                    lastAttackTime = 0,
+                    -- Lightning tower specific properties
+                    lightningSequenceActive = false,
+                    lightningSequenceProgress = 0,
+                    lightningBoltsFired = 0,
+                    -- Rotation properties for tower targeting
+                    currentAngle = 0,
+                    targetAngle = 0,
+                    currentTarget = nil
                 }
                 
                 -- Spawn troop from newly created tier 2
@@ -1976,7 +2026,7 @@ function Grid:hasBasicBubblesToConvert()
 end
 
 -- Find collision-free staging position near target, respecting rally line boundary
-function Grid:findCreepStagingPosition(targetX, targetY, creepSize)
+function Grid:findCreepStagingPosition(targetX, targetY, creepSize, exemptCreep)
     local searchRadius = 5
     local maxRadius = 50
     local rallyLineX = CREEP_RALLY_LINE_X  -- Correct x-coordinate of rally dashed line
@@ -2018,7 +2068,7 @@ function Grid:findCreepStagingPosition(targetX, targetY, creepSize)
         
         -- Test each position for collisions
         for _, pos in ipairs(positions) do
-            if self:isCreepPositionFree(pos.x, pos.y, creepSize) then
+            if self:isCreepPositionFree(pos.x, pos.y, creepSize, exemptCreep) then
                 return pos
             end
         end
@@ -2029,7 +2079,7 @@ function Grid:findCreepStagingPosition(targetX, targetY, creepSize)
 end
 
 -- Check if a position is free of collisions with other creeps
-function Grid:isCreepPositionFree(x, y, size)
+function Grid:isCreepPositionFree(x, y, size, exemptCreep)
     local buffer = 2  -- Minimum spacing between creeps
     
     for _, otherCreep in ipairs(self.creeps) do
@@ -2040,7 +2090,22 @@ function Grid:isCreepPositionFree(x, y, size)
             local minDist = (size + otherCreep.size) / 2 + buffer
             
             if dist < minDist then
-                return false  -- Too close to another creep
+                -- Check if collision can be exempted
+                local canPassThrough = false
+                if exemptCreep and exemptCreep.collisionExempt then
+                    local tierPriority = {basic = 1, tier1 = 2, tier2 = 3}
+                    local exemptPriority = tierPriority[exemptCreep.tier] or 1
+                    local otherPriority = tierPriority[otherCreep.tier] or 1
+                    
+                    -- Allow smaller tier to pass through larger tier during spawn movement
+                    if exemptPriority < otherPriority then
+                        canPassThrough = true  -- Exempt creep can pass through higher tier
+                    end
+                end
+                
+                if not canPassThrough then
+                    return false  -- Too close to another creep
+                end
             end
         end
     end
@@ -2155,16 +2220,22 @@ function Grid:spawnCreeps(count, tier, size)
             pushbackProgress = 0,      -- Animation progress (0-1)
             pushbackFrames = 0,        -- Frames elapsed in pushback
             -- Simple collision avoidance
-            lastDirection = 0  -- -1 = up, 1 = down, 0 = none
+            lastDirection = 0,         -- -1 = up, 1 = down, 0 = none
+            -- Collision exemption system
+            collisionExempt = true,    -- Can pass through higher tier creeps during spawn movement
+            hasReachedRally = false    -- Track when creep reaches rally position
         }
     end
 end
 
 -- Find available staging position - prefer empty, or choose position with fewest creeps of same tier
 function Grid:findAvailableStaging(tier)
-    -- First try: find completely empty staging positions
+    -- Get tier-specific rally positions
+    local rallyPositions = self:getRallyPositionsForTier(tier)
+    
+    -- First try: find completely empty staging positions for this tier
     local available = {}
-    for _, idx in ipairs(CREEP_STAGING_POSITIONS) do
+    for _, idx in ipairs(rallyPositions) do
         if not self.stagingOccupied[idx] then
             available[#available + 1] = idx
         end
@@ -2176,7 +2247,7 @@ function Grid:findAvailableStaging(tier)
     
     -- Second try: all staging positions occupied, find one with fewest creeps of this tier
     local stagingCounts = {}
-    for _, idx in ipairs(CREEP_STAGING_POSITIONS) do
+    for _, idx in ipairs(rallyPositions) do
         stagingCounts[idx] = 0
     end
     
@@ -2204,7 +2275,8 @@ function Grid:findAvailableStaging(tier)
         return bestPositions[math.random(1, #bestPositions)]
     end
     
-    return nil  -- Should never happen
+    -- Fallback: return first position for this tier
+    return rallyPositions[1]
 end
 
 -- Start marching all creeps with staggered delays to prevent bunching
@@ -2268,16 +2340,18 @@ function Grid:updateCreepMovement(creep)
     self:updateCreepAttacks(creep)
 end
 
--- ENHANCED: "Stand and Fight" movement - creeps target closest tower until death
+-- ENHANCED: "Stand and Fight" movement - creeps target towers using zone-based system
 -- Creeps must destroy all towers before they can exit the battlefield
 function Grid:updateStandAndFightMovement(creep)
-    -- LOCK-ON LOGIC: Keep current target if it's still alive, otherwise find new one
+    
+    -- ZONE-BASED TARGETING: Use zone priority system instead of closest tower
     local target = creep.standAndFightTarget
     if not target or target.hitpoints <= 0 then
-        target = self:findClosestLivingTower(creep.x, creep.y)
+        target = self:findZoneBasedTarget(creep)
         creep.standAndFightTarget = target
         if target then
-            print("TARGET: " .. creep.tier .. " creep locked onto tower at (" .. math.floor(target.centerX) .. "," .. math.floor(target.centerY) .. ")")
+            local zone = self:getTowerZone(target.centerX)
+            print("TARGET: " .. creep.tier .. " creep locked onto tower in zone " .. zone .. " at (" .. math.floor(target.centerX) .. "," .. math.floor(target.centerY) .. ")")
         end
     end
     
@@ -2291,13 +2365,52 @@ function Grid:updateStandAndFightMovement(creep)
         local attackRange = self:getCreepAttackRange(creep)
         
         if dist > attackRange then
-            -- Normalize movement direction
-            local moveX = (dx / dist) * CREEP_MARCH_SPEED
-            local moveY = (dy / dist) * CREEP_MARCH_SPEED
+            -- Calculate movement speed (basic creeps move twice as fast)
+            local moveSpeed = CREEP_MARCH_SPEED
             
-            -- Apply movement
-            creep.x = creep.x + moveX
-            creep.y = creep.y + moveY
+            -- BASIC CREEP SPEED: Basic creeps move twice as fast as other tiers
+            if creep.tier == "basic" then
+                moveSpeed = CREEP_MARCH_SPEED * 2  -- Double speed for basic creeps
+                
+                -- CHARGE SYSTEM: Additional speed boost when within 20px (outer edge collision)
+                local distToEdge = dist - TOWER_SPRITE_RADIUS
+                if distToEdge <= CREEP_CHARGE_RANGE then
+                    -- Activate charge mode! (even faster than base double speed)
+                    moveSpeed = CREEP_CHARGE_SPEED
+                    if not creep.charging then
+                        creep.charging = true
+                        print("CHARGE: Basic creep activating charge mode!")
+                    end
+                else
+                    creep.charging = false
+                end
+            end
+            
+            -- Normalize movement direction
+            local moveX = (dx / dist) * moveSpeed
+            local moveY = (dy / dist) * moveSpeed
+            
+            -- Check for tower collisions before applying movement
+            local newX = creep.x + moveX
+            local newY = creep.y + moveY
+            local collision, blockingTower = self:checkTowerCollision(creep, newX, newY)
+            
+            if collision == "clear" then
+                -- Safe to move normally
+                creep.x = newX
+                creep.y = newY
+            elseif collision == "hard_collision" and blockingTower then
+                -- Blocked by tower - find path around it
+                local avoidanceMovement = self:findGuaranteedMovement(creep, blockingTower)
+                if avoidanceMovement then
+                    creep.x = creep.x + avoidanceMovement[1]
+                    creep.y = creep.y + avoidanceMovement[2]
+                end
+            else
+                -- Apply movement anyway for other collision types
+                creep.x = newX
+                creep.y = newY
+            end
         else
             -- In attack range - add debug output
             if math.random(1, 60) == 1 then  -- Occasional debug to avoid spam
@@ -2322,40 +2435,117 @@ function Grid:updateStandAndFightMovement(creep)
     end
 end
 
--- ENHANCED: Get attack range for different creep types (accounts for tower radius)
+-- ENHANCED: Get attack range for different creep types (ensures creeps get within tower range)
 function Grid:getCreepAttackRange(creep)
     if creep.tier == "tier1" then
-        -- Tier 1 ranged: Shooting range minus tower radius for better positioning
-        return CREEP_TIER1_RANGE - TOWER_SPRITE_RADIUS
+        -- Tier 1 ranged: Stop 10px from tower edge (tower radius + 10px)
+        -- This keeps them within rain range (40px) while maintaining tactical distance
+        return TOWER_SPRITE_RADIUS + 10  -- 18 + 10 = 28px (within rain range)
     elseif creep.tier == "tier2" then
-        -- Tier 2 ranged: Shooting range minus tower radius for better positioning  
-        return CREEP_TIER2_RANGE - TOWER_SPRITE_RADIUS
+        -- Tier 2 ranged: Stop 25px from tower edge (tower radius + 25px) 
+        -- More cautious positioning while still within rain range
+        return TOWER_SPRITE_RADIUS + 25  -- 18 + 25 = 43px (just within rain range)
     else
         -- Basic creeps: Must get very close for suicide attacks (tower radius + small buffer)
         return TOWER_SPRITE_RADIUS + 5  -- 18 + 5 = 23px (much closer than 30px)
     end
 end
 
--- Find the closest living tower to a creep
-function Grid:findClosestLivingTower(creepX, creepY)
-    local closestTower = nil
-    local closestDist = math.huge
+-- Get which zone a tower is in (1 = closest to creep rally, 2 = middle, 3 = furthest)
+function Grid:getTowerZone(towerX)
+    if towerX >= ZONE_1_MIN_X then
+        return 1  -- Zone 1: closest to creep rally (rightmost)
+    elseif towerX >= ZONE_2_MIN_X then
+        return 2  -- Zone 2: middle zone
+    else
+        return 3  -- Zone 3: furthest from creep rally (leftmost)
+    end
+end
+
+-- Find target tower using zone-based priority system
+function Grid:findZoneBasedTarget(creep)
+    -- Group towers by zone
+    local zoneTargets = {[1] = {}, [2] = {}, [3] = {}}
     
     for idx, tower in pairs(self.tierOnePositions) do
         if tower.hitpoints > 0 then  -- Only consider living towers
-            local dx = tower.centerX - creepX
-            local dy = tower.centerY - creepY
-            local dist = math.sqrt(dx*dx + dy*dy)
-            
-            if dist < closestDist then
-                closestTower = tower
-                closestDist = dist
+            local zone = self:getTowerZone(tower.centerX)
+            table.insert(zoneTargets[zone], tower)
+        end
+    end
+    
+    for idx, tower in pairs(self.tierTwoPositions) do
+        if tower.hitpoints > 0 then  -- Only consider living towers
+            local zone = self:getTowerZone(tower.centerX)
+            table.insert(zoneTargets[zone], tower)
+        end
+    end
+    
+    -- If creep has current target in same zone, continue targeting that zone
+    local currentZone = nil
+    if creep.standAndFightTarget and creep.standAndFightTarget.hitpoints > 0 then
+        currentZone = self:getTowerZone(creep.standAndFightTarget.centerX)
+        if #zoneTargets[currentZone] > 0 then
+            -- Find closest tower in current zone
+            return self:findClosestTowerInZone(creep, zoneTargets[currentZone])
+        end
+    end
+    
+    -- Priority: Zone 1 (front) -> Zone 2 (middle) -> Zone 3 (back)
+    for zone = 1, 3 do
+        if #zoneTargets[zone] > 0 then
+            if not creep.hasSelectedZoneTarget then
+                -- First time selecting in this zone - choose random tower
+                local randomIndex = math.random(1, #zoneTargets[zone])
+                creep.hasSelectedZoneTarget = true
+                return zoneTargets[zone][randomIndex]
+            else
+                -- Find closest tower in this zone
+                return self:findClosestTowerInZone(creep, zoneTargets[zone])
             end
+        end
+    end
+    
+    return nil  -- No towers left
+end
+
+-- Find closest tower within a specific zone
+function Grid:findClosestTowerInZone(creep, zoneTowers)
+    local closestTower = nil
+    local closestDist = math.huge
+    
+    for _, tower in ipairs(zoneTowers) do
+        local dx = tower.centerX - creep.x
+        local dy = tower.centerY - creep.y
+        local dist = math.sqrt(dx*dx + dy*dy)
+        
+        if dist < closestDist then
+            closestTower = tower
+            closestDist = dist
         end
     end
     
     return closestTower
 end
+
+-- Legacy function for compatibility (redirects to zone-based system)
+function Grid:findClosestLivingTower(creepX, creepY)
+    -- Create temporary creep object for zone targeting
+    local tempCreep = {x = creepX, y = creepY}
+    return self:findZoneBasedTarget(tempCreep)
+end
+
+-- Get rally positions for a specific tier
+function Grid:getRallyPositionsForTier(tier)
+    if tier == "tier1" then
+        return TIER1_RALLY_POSITIONS
+    elseif tier == "tier2" then
+        return TIER2_RALLY_POSITIONS
+    else
+        return BASIC_RALLY_POSITIONS  -- Default to basic positions
+    end
+end
+
 
 -- Main creep update function - coordinates all creep behavior
 -- Performance: Processes all creeps each frame with optimized sub-functions
@@ -2363,6 +2553,14 @@ function Grid:updateCreeps()
     -- Update all individual creep movements and behaviors
     for i = #self.creeps, 1, -1 do
         local creep = self.creeps[i]
+        
+        -- Remove dead creeps (suicide attacks, damage from towers)
+        if creep.hitpoints <= 0 or creep.dead then
+            self:checkStagingAvailability(creep.stagingIdx)
+            table.remove(self.creeps, i)
+            self:checkForVictory()
+            goto continue
+        end
         
         if creep.marching then
             -- Handle marching creep movement and combat
@@ -2386,6 +2584,8 @@ function Grid:updateCreeps()
             -- Handle creep spawn and conversion animations
             self:updateCreepAnimation(creep)
         end
+        
+        ::continue::
     end
 end
 
@@ -2405,12 +2605,15 @@ function Grid:updateCreepAnimation(creep)
         
         if creep.arcProgress >= 1.0 then
             -- Find collision-free position near target
-            local finalPos = self:findCreepStagingPosition(creep.targetX, creep.targetY, creep.size)
+            local finalPos = self:findCreepStagingPosition(creep.targetX, creep.targetY, creep.size, creep)
             creep.x = finalPos.x
             creep.y = finalPos.y
             creep.animating = false
             creep.staged = true
             creep.arcProgress = nil  -- Clean up arc data
+            -- Remove collision exemption when reaching rally position
+            creep.collisionExempt = false
+            creep.hasReachedRally = true
         else
             -- Calculate position along quadratic bezier curve
             local t = creep.arcProgress
@@ -2431,17 +2634,45 @@ function Grid:updateCreepAnimation(creep)
         local dy = creep.targetY - creep.y
         local dist = math.sqrt(dx*dx + dy*dy)
         
-        if dist <= CREEP_MOVE_SPEED then
+        -- Normal spawn movement speed for all creep tiers
+        local spawnMoveSpeed = CREEP_MOVE_SPEED
+        
+        if dist <= spawnMoveSpeed then
             -- Find collision-free position near target
-            local finalPos = self:findCreepStagingPosition(creep.targetX, creep.targetY, creep.size)
+            local finalPos = self:findCreepStagingPosition(creep.targetX, creep.targetY, creep.size, creep)
             creep.x = finalPos.x
             creep.y = finalPos.y
             creep.animating = false
             creep.staged = true
+            -- Remove collision exemption when reaching rally position
+            creep.collisionExempt = false
+            creep.hasReachedRally = true
         else
-            -- Move toward target
-            creep.x = creep.x + (dx/dist) * CREEP_MOVE_SPEED
-            creep.y = creep.y + (dy/dist) * CREEP_MOVE_SPEED
+            -- Move toward target with tower collision checking
+            local moveX = (dx/dist) * spawnMoveSpeed
+            local moveY = (dy/dist) * spawnMoveSpeed
+            local newX = creep.x + moveX
+            local newY = creep.y + moveY
+            
+            -- Check for tower collisions during spawn movement
+            local collision, blockingTower = self:checkTowerCollision(creep, newX, newY)
+            
+            if collision == "clear" then
+                -- Safe to move normally
+                creep.x = newX
+                creep.y = newY
+            elseif collision == "hard_collision" and blockingTower then
+                -- Blocked by tower - try to navigate around it
+                local avoidanceMovement = self:findGuaranteedMovement(creep, blockingTower)
+                if avoidanceMovement then
+                    creep.x = creep.x + avoidanceMovement[1]
+                    creep.y = creep.y + avoidanceMovement[2]
+                end
+            else
+                -- Apply movement anyway for other collision types
+                creep.x = newX
+                creep.y = newY
+            end
         end
     end
 end
@@ -2474,6 +2705,23 @@ function Grid:checkTowerCollision(creep, testX, testY)
             local dy = tower.centerY - testY
             local dist = math.sqrt(dx*dx + dy*dy)
             local towerRadius = TOWER_SPRITE_RADIUS
+            local creepRadius = creep.size / 2
+            
+            -- Check barriers
+            if dist <= towerRadius + creepRadius + 2 then
+                return "hard_collision", tower  -- 2px hard barrier
+            elseif dist <= towerRadius + creepRadius + 10 then
+                return "wake_up", tower  -- 10px wake-up barrier
+            end
+        end
+    end
+    
+    for idx, tower in pairs(self.tierTwoPositions) do
+        if tower.hitpoints > 0 then  -- Only check living towers
+            local dx = tower.centerX - testX
+            local dy = tower.centerY - testY
+            local dist = math.sqrt(dx*dx + dy*dy)
+            local towerRadius = TOWER_SPRITE_RADIUS + 8  -- Larger footprint for Tier 2
             local creepRadius = creep.size / 2
             
             -- Check barriers
@@ -2570,12 +2818,12 @@ function Grid:findGuaranteedMovement(creep, blockingTower)
                 creep.lastDirection = 0   -- No vertical movement
             end
             
-            return testX, testY
+            return {movement[1], movement[2]}
         end
     end
     
     -- Absolute fallback: move in any direction away from current position
-    return creep.x - CREEP_MOVE_SPEED * 0.5, creep.y + (creep.lastDirection * CREEP_MOVE_SPEED)
+    return {-CREEP_MOVE_SPEED * 0.5, creep.lastDirection * CREEP_MOVE_SPEED}
 end
 
 -- Relaxed collision checking for guaranteed movement
@@ -2591,6 +2839,21 @@ function Grid:checkTowerCollisionRelaxed(creep, testX, testY)
             local dy = tower.centerY - testY
             local dist = math.sqrt(dx*dx + dy*dy)
             local towerRadius = TOWER_SPRITE_RADIUS
+            local creepRadius = creep.size / 2
+            
+            -- Only block at 1px hard barrier (no wake-up zone in relaxed mode)
+            if dist <= towerRadius + creepRadius + 1 then
+                return "hard_collision"
+            end
+        end
+    end
+    
+    for idx, tower in pairs(self.tierTwoPositions) do
+        if tower.hitpoints > 0 then  -- Only check living towers
+            local dx = tower.centerX - testX
+            local dy = tower.centerY - testY
+            local dist = math.sqrt(dx*dx + dy*dy)
+            local towerRadius = TOWER_SPRITE_RADIUS + 8  -- Larger footprint for Tier 2
             local creepRadius = creep.size / 2
             
             -- Only block at 1px hard barrier (no wake-up zone in relaxed mode)
@@ -2723,6 +2986,9 @@ function Grid:drawBalls()
     for idx, tierTwoData in pairs(self.tierTwoPositions) do
         self.bubbleSprites.tier2[tierTwoData.sprite]:draw(
             tierTwoData.centerX - 26, tierTwoData.centerY - 26)
+        
+        -- Draw HP bar above tower
+        self:drawTowerHPBar(tierTwoData)
     end
     
     -- Tier 3 bubbles (render at stored center positions, skip if currently flashing)
@@ -3214,7 +3480,9 @@ function Grid:resolveAllUnitCollisions()
             unit = creep,
             type = "creep",
             marching = creep.marching,
-            rallied = false  -- Creeps don't rally
+            rallied = false,  -- Creeps don't rally
+            tier = creep.tier,
+            collisionExempt = creep.collisionExempt or false
         }
     end
     
@@ -3237,22 +3505,56 @@ function Grid:resolveAllUnitCollisions()
             end
             
             if dist < minDist and dist > 0 then
-                -- Calculate push force
-                local pushDist = (minDist - dist) / 2
-                local pushX = (dx/dist) * pushDist
-                local pushY = (dy/dist) * pushDist
+                -- Check collision exemption rules
+                local shouldSkipCollision = false
                 
-                -- Apply push (update original unit positions)
-                u1.unit.x = u1.unit.x - pushX
-                u1.unit.y = u1.unit.y - pushY
-                u2.unit.x = u2.unit.x + pushX
-                u2.unit.y = u2.unit.y + pushY
+                if u1.type == "creep" and u2.type == "creep" then
+                    -- Collision exemption system for creeps
+                    local tierPriority = {basic = 1, tier1 = 2, tier2 = 3}
+                    local u1Priority = tierPriority[u1.tier] or 1
+                    local u2Priority = tierPriority[u2.tier] or 1
+                    
+                    -- Lower tier creeps can pass through higher tier creeps when exempted
+                    if u1.collisionExempt and u1Priority < u2Priority then
+                        shouldSkipCollision = true  -- u1 (lower tier) can pass through u2 (higher tier)
+                    elseif u2.collisionExempt and u2Priority < u1Priority then
+                        shouldSkipCollision = true  -- u2 (lower tier) can pass through u1 (higher tier)
+                    end
+                end
                 
-                -- Update the working copies for this frame
-                u1.x = u1.unit.x
-                u1.y = u1.unit.y
-                u2.x = u2.unit.x
-                u2.y = u2.unit.y
+                if not shouldSkipCollision then
+                    -- Calculate push force
+                    local pushDist = (minDist - dist) / 2
+                    local pushX = (dx/dist) * pushDist
+                    local pushY = (dy/dist) * pushDist
+                    
+                    -- Special case: if one unit is collision exempt, only push the non-exempt unit
+                    if u1.type == "creep" and u1.collisionExempt and u2.type == "creep" and not u2.collisionExempt then
+                        -- Only push u2 (non-exempt)
+                        u2.unit.x = u2.unit.x + pushX * 2
+                        u2.unit.y = u2.unit.y + pushY * 2
+                        u2.x = u2.unit.x
+                        u2.y = u2.unit.y
+                    elseif u2.type == "creep" and u2.collisionExempt and u1.type == "creep" and not u1.collisionExempt then
+                        -- Only push u1 (non-exempt)
+                        u1.unit.x = u1.unit.x - pushX * 2
+                        u1.unit.y = u1.unit.y - pushY * 2
+                        u1.x = u1.unit.x
+                        u1.y = u1.unit.y
+                    else
+                        -- Normal collision: push both units
+                        u1.unit.x = u1.unit.x - pushX
+                        u1.unit.y = u1.unit.y - pushY
+                        u2.unit.x = u2.unit.x + pushX
+                        u2.unit.y = u2.unit.y + pushY
+                        
+                        -- Update the working copies for this frame
+                        u1.x = u1.unit.x
+                        u1.y = u1.unit.y
+                        u2.x = u2.unit.x
+                        u2.y = u2.unit.y
+                    end
+                end
             end
         end
     end
@@ -3306,6 +3608,35 @@ function Grid:updateTowerCombat()
             
             if shouldFire then
                 self:processTowerAttack(tower)
+            end
+        end
+    end
+    
+    -- Update attack cooldowns and process attacks for all Tier 2 towers (all lightning)
+    for idx, tower in pairs(self.tierTwoPositions) do
+        if tower.hitpoints > 0 then  -- Only attack if tower is alive
+            -- Update attack cooldown
+            tower.lastAttackTime = tower.lastAttackTime + 1
+            
+            -- All Tier 2 towers are Lightning towers (ballType 4)
+            local cooldown = LIGHTNING_TOWER_COOLDOWN
+            
+            -- Lightning tower with variable cooldown system
+            local shouldFire = false
+            if tower.lightningSequenceActive then
+                shouldFire = true  -- Always fire during sequence
+            else
+                -- Use variable cooldown if set, otherwise use base cooldown
+                local effectiveCooldown = tower.variableCooldown or cooldown
+                if tower.lastAttackTime >= effectiveCooldown then
+                    shouldFire = true  -- Start new sequence after variable cooldown
+                    tower.lastAttackTime = 0  -- Reset cooldown
+                    tower.variableCooldown = nil  -- Clear variable cooldown for next cycle
+                end
+            end
+            
+            if shouldFire then
+                self:lightningCreateProjectiles(tower)  -- Use lightning attack system
             end
         end
     end
@@ -4136,6 +4467,22 @@ function Grid:destroyTower(tower)
     self:checkForDefeat()
 end
 
+-- Destroy a Tier 2 tower when its hitpoints reach 0
+function Grid:destroyTowerTier2(tower, towerIdx)
+    -- Clear the pattern cells
+    for _, cellIdx in ipairs(tower.pattern) do
+        self.cells[cellIdx].ballType = nil
+        self.cells[cellIdx].occupied = false
+        self.cells[cellIdx].tier = nil
+    end
+    
+    -- Remove from tierTwoPositions
+    self.tierTwoPositions[towerIdx] = nil
+    
+    -- Check for game over (no more towers)
+    self:checkForDefeat()
+end
+
 -- Check if player has lost (no more towers)
 function Grid:checkForDefeat()
     local hasTowers = false
@@ -4416,38 +4763,66 @@ end
 
 -- Check collision between creep projectiles and towers
 function Grid:checkCreepProjectileTowerCollision(projectile, projectileIndex)
-    -- Check all grid cells for tower bubbles
-    for idx = 1, #self.cells do
-        local cell = self.cells[idx]
-        if cell and cell.occupied and cell.ballType and cell.ballType >= 1 and cell.ballType <= 5 then
-            -- Get tower position from positions array
-            local towerPos = self.positions[idx]
-            if towerPos then
-                -- Calculate distance between projectile and tower center
-                local dx = projectile.x - towerPos.x
-                local dy = projectile.y - towerPos.y
-                local distance = math.sqrt(dx*dx + dy*dy)
+    -- Check all tier 1 towers for collision
+    for idx, tower in pairs(self.tierOnePositions) do
+        if tower.hitpoints > 0 then  -- Only check living towers
+            -- Calculate distance between projectile and tower center
+            local dx = projectile.x - tower.centerX
+            local dy = projectile.y - tower.centerY
+            local distance = math.sqrt(dx*dx + dy*dy)
+            
+            -- Tower collision radius (use sprite radius)
+            local towerRadius = TOWER_SPRITE_RADIUS
+            
+            -- Check if projectile hits the tower
+            if distance <= towerRadius then
+                -- Apply damage to tower
+                tower.hitpoints = tower.hitpoints - projectile.damage
                 
-                -- Tower collision radius (similar to creep size)
-                local towerRadius = 10  -- Radius for tower collision detection
+                -- Remove the projectile
+                table.remove(self.projectiles, projectileIndex)
                 
-                -- Check if projectile hits the tower
-                if distance <= towerRadius then
-                    -- Destroy the tower by clearing the cell
-                    cell.ballType = nil
-                    cell.occupied = false
-                    cell.tier = nil
-                    
-                    -- Remove the projectile
-                    table.remove(self.projectiles, projectileIndex)
-                    
-                    print("COMBAT: Tower destroyed by creep projectile!")
-                    
-                    -- Check for game over (all towers destroyed)
-                    self:checkForGameOver()
-                    
-                    return  -- Projectile hit something, stop processing
+                print("HIT: Tower hit by " .. projectile.creepType .. " projectile! Damage=" .. projectile.damage .. ", HP left=" .. tower.hitpoints)
+                
+                -- Check if tower is destroyed
+                if tower.hitpoints <= 0 then
+                    print("DESTROY: Tower destroyed by creep projectile!")
+                    self:destroyTower(tower)
                 end
+                
+                return  -- Projectile hit something, stop processing
+            end
+        end
+    end
+    
+    -- Check all tier 2 towers for collision
+    for idx, tower in pairs(self.tierTwoPositions) do
+        if tower.hitpoints > 0 then  -- Only check living towers
+            -- Calculate distance between projectile and tower center
+            local dx = projectile.x - tower.centerX
+            local dy = projectile.y - tower.centerY
+            local distance = math.sqrt(dx*dx + dy*dy)
+            
+            -- Tower collision radius (larger for tier 2)
+            local towerRadius = TOWER_SPRITE_RADIUS + 8
+            
+            -- Check if projectile hits the tower
+            if distance <= towerRadius then
+                -- Apply damage to tower
+                tower.hitpoints = tower.hitpoints - projectile.damage
+                
+                -- Remove the projectile
+                table.remove(self.projectiles, projectileIndex)
+                
+                print("HIT: Tier 2 Tower hit by " .. projectile.creepType .. " projectile! Damage=" .. projectile.damage .. ", HP left=" .. tower.hitpoints)
+                
+                -- Check if tower is destroyed
+                if tower.hitpoints <= 0 then
+                    print("DESTROY: Tier 2 Tower destroyed by creep projectile!")
+                    self:destroyTowerTier2(tower, idx)
+                end
+                
+                return  -- Projectile hit something, stop processing
             end
         end
     end
@@ -4544,6 +4919,10 @@ function Grid:drawProjectiles()
                 gfx.fillCircleAtPoint(projectile.x, projectile.y, 2)  -- Larger projectiles
             elseif projectile.towerType == 5 then  -- Wind tower
                 gfx.fillCircleAtPoint(projectile.x, projectile.y, 1)  -- Same size as flame
+            elseif projectile.creepType == "tier1" then  -- Tier 1 creep projectile
+                gfx.fillCircleAtPoint(projectile.x, projectile.y, 1)  -- 1px diameter
+            elseif projectile.creepType == "tier2" then  -- Tier 2 creep projectile
+                gfx.fillCircleAtPoint(projectile.x, projectile.y, 2)  -- 2px diameter
             end
         end
     end
