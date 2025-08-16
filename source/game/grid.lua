@@ -20,7 +20,7 @@ local gfx <const> = pd.graphics
 -- Core constants
 local BALL_SPEED <const> = 9
 local COLLISION_RADIUS <const> = 20
-local FLYING_BALL_RADIUS <const> = 18  -- 2px smaller for tighter gaps
+local FLYING_BALL_RADIUS <const> = 17  -- Slightly reduced for better skill shots, but not too small
 local AIM_LINE_LENGTH <const> = 50
 -- Shooter system constants - now free-floating on vertical line
 local SHOOTER_X <const> = 320  -- Vertical line bisecting even row cell 16 midpoints
@@ -235,9 +235,9 @@ local WIND_PUSHBACK_DURATION <const> = 9       -- Frames to complete pushback an
 local WIND_PUSHBACK_COOLDOWN <const> = 15      -- Frames between pushback applications
 
 -- BALANCED: Lightning Tower (ballType 4) - High burst damage, short range
-local LIGHTNING_TOWER_RANGE <const> = 160       -- Detection range (was 180, shorter for balance)
+local LIGHTNING_TOWER_RANGE <const> = 160       -- Legacy detection range (not used for targeting to avoid out-of-range locks)
 local LIGHTNING_TOWER_COOLDOWN <const> = 8      -- Cooldown between sequences (was 6, slightly slower)
-local LIGHTNING_BOLT_RANGE <const> = 75         -- Lightning bolt max range (was 70, slightly longer)
+local LIGHTNING_BOLT_RANGE <const> = 75         -- Lightning bolt range AND targeting range (was 70, slightly longer)
 local LIGHTNING_BOLT_DAMAGE <const> = 35        -- Damage per bolt hit (was 12, massive increase!)
 local LIGHTNING_BOLTS_PER_SEQUENCE <const> = 2  -- Number of bolts fired in sequence
 local LIGHTNING_SEQUENCE_DURATION <const> = 8   -- Frames for entire sequence (bolts at frame 1 and 5)
@@ -310,7 +310,7 @@ local TOWER_CONFIGS <const> = {
     },
     [4] = { -- Lightning Tower (Lightning)
         name = "Lightning",
-        range = LIGHTNING_TOWER_RANGE,
+        range = LIGHTNING_BOLT_RANGE, -- Use bolt range for consistency with targeting
         projectileSpeed = 0, -- Instant bolts
         projectileRange = LIGHTNING_BOLT_RANGE,
         projectileDamage = LIGHTNING_BOLT_DAMAGE,
@@ -548,6 +548,102 @@ function Grid:setupGameState()
     self:setupStartingBalls()
 end
 
+-- Get level-specific starting grid pattern (shared between all setup functions)
+function Grid:getLevelStartingPattern(level)
+    local prePlacedCells = {}
+    
+    -- Progressive starting grids based on level (cumulative additions)
+    if level == 1 then
+        -- Level 1: Base grid
+        prePlacedCells = {
+            {{1,1}, "A"}, {{1,2}, "A"}, {{2,1}, "A"}, {{2,2}, "A"}, {{3,1}, "A"}, {{3,2}, "A"}, {{3,3}, "A"},
+            {{4,1}, "B"}, {{4,2}, "B"}, {{4,3}, "B"}, {{5,3}, "B"}, {{5,4}, "B"},
+            {{13,1}, "E"}, {{13,2}, "E"}, {{12,1}, "E"}, {{12,2}, "E"}, {{11,1}, "E"}, {{11,2}, "E"}, {{11,3}, "E"},
+            {{10,1}, "D"}, {{10,2}, "D"}, {{10,3}, "D"}, {{9,3}, "D"}, {{9,4}, "D"},
+            {{6,3}, "A"}, {{6,4}, "A"}, {{7,4}, "A"}, {{7,5}, "A"}, {{8,3}, "A"}, {{8,4}, "A"},
+            {{6,5}, "E"}, {{6,6}, "E"}, {{7,6}, "E"}, {{7,7}, "E"}, {{8,5}, "E"}, {{8,6}, "E"},
+        }
+    elseif level == 2 then
+        -- Level 2: Base grid + additional groups
+        prePlacedCells = {
+            -- Level 1 base
+            {{1,1}, "A"}, {{1,2}, "A"}, {{2,1}, "A"}, {{2,2}, "A"}, {{3,1}, "A"}, {{3,2}, "A"}, {{3,3}, "A"},
+            {{4,1}, "B"}, {{4,2}, "B"}, {{4,3}, "B"}, {{5,3}, "B"}, {{5,4}, "B"},
+            {{13,1}, "E"}, {{13,2}, "E"}, {{12,1}, "E"}, {{12,2}, "E"}, {{11,1}, "E"}, {{11,2}, "E"}, {{11,3}, "E"},
+            {{10,1}, "D"}, {{10,2}, "D"}, {{10,3}, "D"}, {{9,3}, "D"}, {{9,4}, "D"},
+            {{6,3}, "A"}, {{6,4}, "A"}, {{7,4}, "A"}, {{7,5}, "A"}, {{8,3}, "A"}, {{8,4}, "A"},
+            {{6,5}, "E"}, {{6,6}, "E"}, {{7,6}, "E"}, {{7,7}, "E"}, {{8,5}, "E"}, {{8,6}, "E"},
+            -- Level 2 additions
+            {{1,3}, "E"}, {{1,4}, "E"}, {{2,3}, "E"}, {{2,4}, "E"},
+            {{3,4}, "D"}, {{3,5}, "D"}, {{4,4}, "D"}, {{4,5}, "D"}, {{5,5}, "D"}, {{5,6}, "D"},
+            {{13,3}, "A"}, {{13,4}, "A"}, {{12,3}, "A"}, {{12,4}, "A"},
+            {{11,4}, "B"}, {{11,5}, "B"}, {{10,4}, "B"}, {{10,5}, "B"}, {{9,5}, "B"}, {{9,6}, "B"},
+        }
+    elseif level == 3 then
+        -- Level 3: Levels 1-2 + new additions
+        prePlacedCells = {
+            -- Levels 1-2 base
+            {{1,1}, "A"}, {{1,2}, "A"}, {{2,1}, "A"}, {{2,2}, "A"}, {{3,1}, "A"}, {{3,2}, "A"}, {{3,3}, "A"},
+            {{4,1}, "B"}, {{4,2}, "B"}, {{4,3}, "B"}, {{5,3}, "B"}, {{5,4}, "B"},
+            {{13,1}, "E"}, {{13,2}, "E"}, {{12,1}, "E"}, {{12,2}, "E"}, {{11,1}, "E"}, {{11,2}, "E"}, {{11,3}, "E"},
+            {{10,1}, "D"}, {{10,2}, "D"}, {{10,3}, "D"}, {{9,3}, "D"}, {{9,4}, "D"},
+            {{6,3}, "A"}, {{6,4}, "A"}, {{7,4}, "A"}, {{7,5}, "A"}, {{8,3}, "A"}, {{8,4}, "A"},
+            {{6,5}, "E"}, {{6,6}, "E"}, {{7,6}, "E"}, {{7,7}, "E"}, {{8,5}, "E"}, {{8,6}, "E"},
+            {{1,3}, "E"}, {{1,4}, "E"}, {{2,3}, "E"}, {{2,4}, "E"},
+            {{3,4}, "D"}, {{3,5}, "D"}, {{4,4}, "D"}, {{4,5}, "D"}, {{5,5}, "D"}, {{5,6}, "D"},
+            {{13,3}, "A"}, {{13,4}, "A"}, {{12,3}, "A"}, {{12,4}, "A"},
+            {{11,4}, "B"}, {{11,5}, "B"}, {{10,4}, "B"}, {{10,5}, "B"}, {{9,5}, "B"}, {{9,6}, "B"},
+            -- Level 3 additions
+            {{6,9}, "C"}, {{6,10}, "C"}, {{7,10}, "C"}, {{7,11}, "C"}, {{8,9}, "C"}, {{8,10}, "C"},
+            {{6,7}, "C"}, {{6,8}, "C"}, {{7,8}, "C"}, {{7,9}, "C"}, {{10,7}, "C"}, {{10,8}, "C"},
+        }
+    elseif level == 4 then
+        -- Level 4: Levels 1-3 + new additions
+        prePlacedCells = {
+            -- Levels 1-3 base
+            {{1,1}, "A"}, {{1,2}, "A"}, {{2,1}, "A"}, {{2,2}, "A"}, {{3,1}, "A"}, {{3,2}, "A"}, {{3,3}, "A"},
+            {{4,1}, "B"}, {{4,2}, "B"}, {{4,3}, "B"}, {{5,3}, "B"}, {{5,4}, "B"},
+            {{13,1}, "E"}, {{13,2}, "E"}, {{12,1}, "E"}, {{12,2}, "E"}, {{11,1}, "E"}, {{11,2}, "E"}, {{11,3}, "E"},
+            {{10,1}, "D"}, {{10,2}, "D"}, {{10,3}, "D"}, {{9,3}, "D"}, {{9,4}, "D"},
+            {{6,3}, "A"}, {{6,4}, "A"}, {{7,4}, "A"}, {{7,5}, "A"}, {{8,3}, "A"}, {{8,4}, "A"},
+            {{6,5}, "E"}, {{6,6}, "E"}, {{7,6}, "E"}, {{7,7}, "E"}, {{8,5}, "E"}, {{8,6}, "E"},
+            {{1,3}, "E"}, {{1,4}, "E"}, {{2,3}, "E"}, {{2,4}, "E"},
+            {{3,4}, "D"}, {{3,5}, "D"}, {{4,4}, "D"}, {{4,5}, "D"}, {{5,5}, "D"}, {{5,6}, "D"},
+            {{13,3}, "A"}, {{13,4}, "A"}, {{12,3}, "A"}, {{12,4}, "A"},
+            {{11,4}, "B"}, {{11,5}, "B"}, {{10,4}, "B"}, {{10,5}, "B"}, {{9,5}, "B"}, {{9,6}, "B"},
+            {{6,9}, "C"}, {{6,10}, "C"}, {{7,10}, "C"}, {{7,11}, "C"}, {{8,9}, "C"}, {{8,10}, "C"},
+            {{6,7}, "C"}, {{6,8}, "C"}, {{7,8}, "C"}, {{7,9}, "C"}, {{10,7}, "C"}, {{10,8}, "C"},
+            -- Level 4 additions
+            {{1,9}, "C"}, {{1,10}, "C"}, {{1,11}, "C"}, {{2,9}, "C"}, {{2,10}, "C"},
+            {{13,9}, "C"}, {{13,10}, "C"}, {{13,11}, "C"}, {{12,9}, "C"}, {{12,10}, "C"},
+        }
+    else
+        -- Level 5+: Levels 1-4 + final additions
+        prePlacedCells = {
+            -- Levels 1-4 base
+            {{1,1}, "A"}, {{1,2}, "A"}, {{2,1}, "A"}, {{2,2}, "A"}, {{3,1}, "A"}, {{3,2}, "A"}, {{3,3}, "A"},
+            {{4,1}, "B"}, {{4,2}, "B"}, {{4,3}, "B"}, {{5,3}, "B"}, {{5,4}, "B"},
+            {{13,1}, "E"}, {{13,2}, "E"}, {{12,1}, "E"}, {{12,2}, "E"}, {{11,1}, "E"}, {{11,2}, "E"}, {{11,3}, "E"},
+            {{10,1}, "D"}, {{10,2}, "D"}, {{10,3}, "D"}, {{9,3}, "D"}, {{9,4}, "D"},
+            {{6,3}, "A"}, {{6,4}, "A"}, {{7,4}, "A"}, {{7,5}, "A"}, {{8,3}, "A"}, {{8,4}, "A"},
+            {{6,5}, "E"}, {{6,6}, "E"}, {{7,6}, "E"}, {{7,7}, "E"}, {{8,5}, "E"}, {{8,6}, "E"},
+            {{1,3}, "E"}, {{1,4}, "E"}, {{2,3}, "E"}, {{2,4}, "E"},
+            {{3,4}, "D"}, {{3,5}, "D"}, {{4,4}, "D"}, {{4,5}, "D"}, {{5,5}, "D"}, {{5,6}, "D"},
+            {{13,3}, "A"}, {{13,4}, "A"}, {{12,3}, "A"}, {{12,4}, "A"},
+            {{11,4}, "B"}, {{11,5}, "B"}, {{10,4}, "B"}, {{10,5}, "B"}, {{9,5}, "B"}, {{9,6}, "B"},
+            {{6,9}, "C"}, {{6,10}, "C"}, {{7,10}, "C"}, {{7,11}, "C"}, {{8,9}, "C"}, {{8,10}, "C"},
+            {{6,7}, "C"}, {{6,8}, "C"}, {{7,8}, "C"}, {{7,9}, "C"}, {{10,7}, "C"}, {{10,8}, "C"},
+            {{1,9}, "C"}, {{1,10}, "C"}, {{1,11}, "C"}, {{2,9}, "C"}, {{2,10}, "C"},
+            {{13,9}, "C"}, {{13,10}, "C"}, {{13,11}, "C"}, {{12,9}, "C"}, {{12,10}, "C"},
+            -- Level 5+ additions
+            {{4,6}, "A"}, {{4,7}, "A"}, {{5,7}, "A"}, {{5,8}, "A"},
+            {{9,7}, "A"}, {{9,8}, "A"}, {{10,6}, "A"}, {{10,7}, "A"},
+        }
+    end
+    
+    return prePlacedCells
+end
+
 -- Initialize starting grid with pre-placed bubbles based on level
 function Grid:setupStartingBalls()
     -- Randomly assign bubble types to letters A, B, C, D, E (types 1-5)
@@ -566,49 +662,112 @@ function Grid:setupStartingBalls()
     letterTypes.D = availableTypes[4]
     letterTypes.E = availableTypes[5]
     
-    local prePlacedCells = {}
+    -- Get level-specific pattern from shared function (eliminates code duplication)
+    local prePlacedCells = self:getLevelStartingPattern(self.currentLevel)
     
-    -- Different starting grids based on level
-    if self.currentLevel <= 2 then
-        -- Simpler grid for levels 1-2
-        prePlacedCells = {
+    -- Place all bubble types on the grid based on the pattern
+    for _, cellData in ipairs(prePlacedCells) do
+        local pos = cellData[1]
+        local letter = cellData[2]
+        local row, col = pos[1], pos[2]
+        
+        if self:isValidGridPosition(row, col) then
+            local idx = (row - 1) * 20 + col
+            if self.cells[idx] and not self.cells[idx].permanent then
+                self.cells[idx].ballType = letterTypes[letter]
+                self.cells[idx].occupied = true
+                self.cells[idx].tier = "basic"
+            end
+        end
+    end
+end
+--]]
+
+-- Initialize starting grid with pre-placed bubbles that respects preserved towers
+function Grid:setupStartingBallsWithTowerPreservation()
+    -- Randomly assign bubble types to letters A, B, C, D, E (types 1-5)
+    local letterTypes = {}
+    local availableTypes = {1, 2, 3, 4, 5}
+    
+    -- Shuffle and assign types to letters
+    for i = #availableTypes, 2, -1 do
+        local j = math.random(i)
+        availableTypes[i], availableTypes[j] = availableTypes[j], availableTypes[i]
+    end
+    
+    letterTypes.A = availableTypes[1]
+    letterTypes.B = availableTypes[2]
+    letterTypes.C = availableTypes[3]
+    letterTypes.D = availableTypes[4]
+    letterTypes.E = availableTypes[5]
+    
+    -- Get level-specific pattern from shared function (eliminates code duplication)
+    local prePlacedCells = self:getLevelStartingPattern(self.currentLevel)
+    
+    -- Place all bubble types on the grid based on the pattern, but skip if towers exist
+    for _, cellData in ipairs(prePlacedCells) do
+        local pos = cellData[1]
+        local letter = cellData[2]
+        local row, col = pos[1], pos[2]
+        
+        if self:isValidGridPosition(row, col) then
+            local idx = (row - 1) * 20 + col
+            if self.cells[idx] and not self.cells[idx].permanent then
+                -- Check if a tower already occupies this position - if so, skip
+                local hasTower = false
+                for _, tower in pairs(self.tierOnePositions) do
+                    if tower.triangle then
+                        for _, triangleIdx in ipairs(tower.triangle) do
+                            if triangleIdx == idx then
+                                hasTower = true
+                                break
+                            end
+                        end
+                    end
+                end
+                
+                for _, tower in pairs(self.tierTwoPositions) do
+                    if tower.pattern then
+                        for _, patternIdx in ipairs(tower.pattern) do
+                            if patternIdx == idx then
+                                hasTower = true
+                                break
+                            end
+                        end
+                    end
+                end
+                
+                if not hasTower then
+                    self.cells[idx].ballType = letterTypes[letter]
+                    self.cells[idx].occupied = true
+                    self.cells[idx].tier = "basic"
+                end
+            end
+        end
+    end
+end
+
+--[[ COMMENTED OUT ORPHANED DATA
+            -- Level 1 base
             {{1,1}, "A"}, {{1,2}, "A"}, {{2,1}, "A"}, {{2,2}, "A"}, {{3,1}, "A"}, {{3,2}, "A"}, {{3,3}, "A"},
             {{4,1}, "B"}, {{4,2}, "B"}, {{4,3}, "B"}, {{5,3}, "B"}, {{5,4}, "B"},
             {{13,1}, "E"}, {{13,2}, "E"}, {{12,1}, "E"}, {{12,2}, "E"}, {{11,1}, "E"}, {{11,2}, "E"}, {{11,3}, "E"},
             {{10,1}, "D"}, {{10,2}, "D"}, {{10,3}, "D"}, {{9,3}, "D"}, {{9,4}, "D"},
             {{6,3}, "A"}, {{6,4}, "A"}, {{7,4}, "A"}, {{7,5}, "A"}, {{8,3}, "A"}, {{8,4}, "A"},
             {{6,5}, "E"}, {{6,6}, "E"}, {{7,6}, "E"}, {{7,7}, "E"}, {{8,5}, "E"}, {{8,6}, "E"},
-            {{6,7}, "C"}, {{6,8}, "C"}, {{7,8}, "C"}, {{7,9}, "C"}, {{8,7}, "C"}, {{8,8}, "C"}
-        }
-    else
-        -- Complex grid for levels 3-5
-        prePlacedCells = {
-            -- A cells: 1,1 1,2 2,1 2,2
-            {{1,1}, "A"}, {{1,2}, "A"}, {{2,1}, "A"}, {{2,2}, "A"},
-            -- B cells: 3,1 3,2 3,3 4,1 4,2  
-            {{3,1}, "B"}, {{3,2}, "B"}, {{3,3}, "B"}, {{4,1}, "B"}, {{4,2}, "B"},
-            -- E cells: 13,1 13,2 12,1 12,2
-            {{13,1}, "E"}, {{13,2}, "E"}, {{12,1}, "E"}, {{12,2}, "E"},
-            -- D cells: 11,1 11,2 11,3 10,1 10,2
-            {{11,1}, "D"}, {{11,2}, "D"}, {{11,3}, "D"}, {{10,1}, "D"}, {{10,2}, "D"},
-            -- E cells: 4,3 5,3 5,4 6,3
-            {{4,3}, "E"}, {{5,3}, "E"}, {{5,4}, "E"}, {{6,3}, "E"},
-            -- A cells: 10,3 9,3 9,4 8,3
-            {{10,3}, "A"}, {{9,3}, "A"}, {{9,4}, "A"}, {{8,3}, "A"},
-            -- C cells: 6,4 7,4 7,5 8,4
-            {{6,4}, "C"}, {{7,4}, "C"}, {{7,5}, "C"}, {{8,4}, "C"},
-            -- B cells: 6,5 7,6 8,5
-            {{6,5}, "B"}, {{7,6}, "B"}, {{8,5}, "B"},
-            -- D cells: 6,6 7,7 8,6
-            {{6,6}, "D"}, {{7,7}, "D"}, {{8,6}, "D"},
-            -- C cells: 6,7 7,8 7,9 8,7
-            {{6,7}, "C"}, {{7,8}, "C"}, {{7,9}, "C"}, {{8,7}, "C"},
-            -- C cells: 6,8 8,8 (changed to match 6,7 type)
-            {{6,8}, "C"}, {{8,8}, "C"},
-            -- B cells: 6,9 7,10 8,9
-            {{6,9}, "B"}, {{7,10}, "B"}, {{8,9}, "B"},
-            -- D cells: 6,10 7,11 8,10
-            {{6,10}, "D"}, {{7,11}, "D"}, {{8,10}, "D"}
+            -- Level 2 additions
+            {{1,3}, "E"}, {{1,4}, "E"}, {{2,3}, "E"}, {{2,4}, "E"},
+            {{3,4}, "D"}, {{3,5}, "D"}, {{4,4}, "D"}, {{4,5}, "D"}, {{5,5}, "D"}, {{5,6}, "D"},
+            {{13,3}, "A"}, {{13,4}, "A"}, {{12,3}, "A"}, {{12,4}, "A"},
+            {{11,4}, "B"}, {{11,5}, "B"}, {{10,4}, "B"}, {{10,5}, "B"}, {{9,5}, "B"}, {{9,6}, "B"},
+            -- Level 3 additions
+            {{6,9}, "C"}, {{6,10}, "C"}, {{7,10}, "C"}, {{7,11}, "C"}, {{8,9}, "C"}, {{8,10}, "C"},
+            -- Level 4 additions
+            {{1,9}, "C"}, {{1,10}, "C"}, {{1,11}, "C"}, {{2,9}, "C"}, {{2,10}, "C"},
+            {{13,9}, "C"}, {{13,10}, "C"}, {{13,11}, "C"}, {{12,9}, "C"}, {{12,10}, "C"},
+            -- Level 5+ additions
+            {{4,6}, "A"}, {{4,7}, "A"}, {{5,7}, "A"}, {{5,8}, "A"},
+            {{9,7}, "E"}, {{9,8}, "E"}, {{10,6}, "E"}, {{10,7}, "E"},
         }
     end
     
@@ -629,64 +788,288 @@ function Grid:setupStartingBalls()
     end
 end
 
+-- Initialize starting grid with pre-placed bubbles that respects preserved towers
+function Grid:setupStartingBallsWithTowerPreservation()
+    -- Randomly assign bubble types to letters A, B, C, D, E (types 1-5)
+    local letterTypes = {}
+    local availableTypes = {1, 2, 3, 4, 5}
+    
+    -- Shuffle and assign types to letters
+    for i = #availableTypes, 2, -1 do
+        local j = math.random(i)
+        availableTypes[i], availableTypes[j] = availableTypes[j], availableTypes[i]
+    end
+    
+    letterTypes.A = availableTypes[1]
+    letterTypes.B = availableTypes[2]
+    letterTypes.C = availableTypes[3]
+    letterTypes.D = availableTypes[4]
+    letterTypes.E = availableTypes[5]
+    
+    local prePlacedCells = {}
+    
+    -- Progressive starting grids based on level (cumulative additions)
+    if self.currentLevel == 1 then
+        -- Level 1: Base grid
+        prePlacedCells = {
+            {{1,1}, "A"}, {{1,2}, "A"}, {{2,1}, "A"}, {{2,2}, "A"}, {{3,1}, "A"}, {{3,2}, "A"}, {{3,3}, "A"},
+            {{4,1}, "B"}, {{4,2}, "B"}, {{4,3}, "B"}, {{5,3}, "B"}, {{5,4}, "B"},
+            {{13,1}, "E"}, {{13,2}, "E"}, {{12,1}, "E"}, {{12,2}, "E"}, {{11,1}, "E"}, {{11,2}, "E"}, {{11,3}, "E"},
+            {{10,1}, "D"}, {{10,2}, "D"}, {{10,3}, "D"}, {{9,3}, "D"}, {{9,4}, "D"},
+            {{6,3}, "A"}, {{6,4}, "A"}, {{7,4}, "A"}, {{7,5}, "A"}, {{8,3}, "A"}, {{8,4}, "A"},
+            {{6,5}, "E"}, {{6,6}, "E"}, {{7,6}, "E"}, {{7,7}, "E"}, {{8,5}, "E"}, {{8,6}, "E"},
+        }
+    elseif self.currentLevel == 2 then
+        -- Level 2: Base grid + additional groups
+        prePlacedCells = {
+            -- Level 1 base
+            {{1,1}, "A"}, {{1,2}, "A"}, {{2,1}, "A"}, {{2,2}, "A"}, {{3,1}, "A"}, {{3,2}, "A"}, {{3,3}, "A"},
+            {{4,1}, "B"}, {{4,2}, "B"}, {{4,3}, "B"}, {{5,3}, "B"}, {{5,4}, "B"},
+            {{13,1}, "E"}, {{13,2}, "E"}, {{12,1}, "E"}, {{12,2}, "E"}, {{11,1}, "E"}, {{11,2}, "E"}, {{11,3}, "E"},
+            {{10,1}, "D"}, {{10,2}, "D"}, {{10,3}, "D"}, {{9,3}, "D"}, {{9,4}, "D"},
+            {{6,3}, "A"}, {{6,4}, "A"}, {{7,4}, "A"}, {{7,5}, "A"}, {{8,3}, "A"}, {{8,4}, "A"},
+            {{6,5}, "E"}, {{6,6}, "E"}, {{7,6}, "E"}, {{7,7}, "E"}, {{8,5}, "E"}, {{8,6}, "E"},
+            -- Level 2 additions
+            {{1,3}, "E"}, {{1,4}, "E"}, {{2,3}, "E"}, {{2,4}, "E"},
+            {{3,4}, "D"}, {{3,5}, "D"}, {{4,4}, "D"}, {{4,5}, "D"}, {{5,5}, "D"}, {{5,6}, "D"},
+            {{13,3}, "A"}, {{13,4}, "A"}, {{12,3}, "A"}, {{12,4}, "A"},
+            {{11,4}, "B"}, {{11,5}, "B"}, {{10,4}, "B"}, {{10,5}, "B"}, {{9,5}, "B"}, {{9,6}, "B"},
+        }
+    elseif self.currentLevel == 3 then
+        -- Level 3: Levels 1-2 + new additions
+        prePlacedCells = {
+            -- Level 1 base
+            {{1,1}, "A"}, {{1,2}, "A"}, {{2,1}, "A"}, {{2,2}, "A"}, {{3,1}, "A"}, {{3,2}, "A"}, {{3,3}, "A"},
+            {{4,1}, "B"}, {{4,2}, "B"}, {{4,3}, "B"}, {{5,3}, "B"}, {{5,4}, "B"},
+            {{13,1}, "E"}, {{13,2}, "E"}, {{12,1}, "E"}, {{12,2}, "E"}, {{11,1}, "E"}, {{11,2}, "E"}, {{11,3}, "E"},
+            {{10,1}, "D"}, {{10,2}, "D"}, {{10,3}, "D"}, {{9,3}, "D"}, {{9,4}, "D"},
+            {{6,3}, "A"}, {{6,4}, "A"}, {{7,4}, "A"}, {{7,5}, "A"}, {{8,3}, "A"}, {{8,4}, "A"},
+            {{6,5}, "E"}, {{6,6}, "E"}, {{7,6}, "E"}, {{7,7}, "E"}, {{8,5}, "E"}, {{8,6}, "E"},
+            -- Level 2 additions
+            {{1,3}, "E"}, {{1,4}, "E"}, {{2,3}, "E"}, {{2,4}, "E"},
+            {{3,4}, "D"}, {{3,5}, "D"}, {{4,4}, "D"}, {{4,5}, "D"}, {{5,5}, "D"}, {{5,6}, "D"},
+            {{13,3}, "A"}, {{13,4}, "A"}, {{12,3}, "A"}, {{12,4}, "A"},
+            {{11,4}, "B"}, {{11,5}, "B"}, {{10,4}, "B"}, {{10,5}, "B"}, {{9,5}, "B"}, {{9,6}, "B"},
+            -- Level 3 additions
+            {{6,9}, "C"}, {{6,10}, "C"}, {{7,10}, "C"}, {{7,11}, "C"}, {{8,9}, "C"}, {{8,10}, "C"},
+        }
+    elseif self.currentLevel == 4 then
+        -- Level 4: Levels 1-3 + new additions
+        prePlacedCells = {
+            -- Level 1 base
+            {{1,1}, "A"}, {{1,2}, "A"}, {{2,1}, "A"}, {{2,2}, "A"}, {{3,1}, "A"}, {{3,2}, "A"}, {{3,3}, "A"},
+            {{4,1}, "B"}, {{4,2}, "B"}, {{4,3}, "B"}, {{5,3}, "B"}, {{5,4}, "B"},
+            {{13,1}, "E"}, {{13,2}, "E"}, {{12,1}, "E"}, {{12,2}, "E"}, {{11,1}, "E"}, {{11,2}, "E"}, {{11,3}, "E"},
+            {{10,1}, "D"}, {{10,2}, "D"}, {{10,3}, "D"}, {{9,3}, "D"}, {{9,4}, "D"},
+            {{6,3}, "A"}, {{6,4}, "A"}, {{7,4}, "A"}, {{7,5}, "A"}, {{8,3}, "A"}, {{8,4}, "A"},
+            {{6,5}, "E"}, {{6,6}, "E"}, {{7,6}, "E"}, {{7,7}, "E"}, {{8,5}, "E"}, {{8,6}, "E"},
+            -- Level 2 additions
+            {{1,3}, "E"}, {{1,4}, "E"}, {{2,3}, "E"}, {{2,4}, "E"},
+            {{3,4}, "D"}, {{3,5}, "D"}, {{4,4}, "D"}, {{4,5}, "D"}, {{5,5}, "D"}, {{5,6}, "D"},
+            {{13,3}, "A"}, {{13,4}, "A"}, {{12,3}, "A"}, {{12,4}, "A"},
+            {{11,4}, "B"}, {{11,5}, "B"}, {{10,4}, "B"}, {{10,5}, "B"}, {{9,5}, "B"}, {{9,6}, "B"},
+            -- Level 3 additions
+            {{6,9}, "C"}, {{6,10}, "C"}, {{7,10}, "C"}, {{7,11}, "C"}, {{8,9}, "C"}, {{8,10}, "C"},
+            -- Level 4 additions
+            {{1,9}, "C"}, {{1,10}, "C"}, {{1,11}, "C"}, {{2,9}, "C"}, {{2,10}, "C"},
+            {{13,9}, "C"}, {{13,10}, "C"}, {{13,11}, "C"}, {{12,9}, "C"}, {{12,10}, "C"},
+        }
+    else
+        -- Level 5+: All previous + final additions
+        prePlacedCells = {
+            -- Level 1 base
+            {{1,1}, "A"}, {{1,2}, "A"}, {{2,1}, "A"}, {{2,2}, "A"}, {{3,1}, "A"}, {{3,2}, "A"}, {{3,3}, "A"},
+            {{4,1}, "B"}, {{4,2}, "B"}, {{4,3}, "B"}, {{5,3}, "B"}, {{5,4}, "B"},
+            {{13,1}, "E"}, {{13,2}, "E"}, {{12,1}, "E"}, {{12,2}, "E"}, {{11,1}, "E"}, {{11,2}, "E"}, {{11,3}, "E"},
+            {{10,1}, "D"}, {{10,2}, "D"}, {{10,3}, "D"}, {{9,3}, "D"}, {{9,4}, "D"},
+            {{6,3}, "A"}, {{6,4}, "A"}, {{7,4}, "A"}, {{7,5}, "A"}, {{8,3}, "A"}, {{8,4}, "A"},
+            {{6,5}, "E"}, {{6,6}, "E"}, {{7,6}, "E"}, {{7,7}, "E"}, {{8,5}, "E"}, {{8,6}, "E"},
+            -- Level 2 additions
+            {{1,3}, "E"}, {{1,4}, "E"}, {{2,3}, "E"}, {{2,4}, "E"},
+            {{3,4}, "D"}, {{3,5}, "D"}, {{4,4}, "D"}, {{4,5}, "D"}, {{5,5}, "D"}, {{5,6}, "D"},
+            {{13,3}, "A"}, {{13,4}, "A"}, {{12,3}, "A"}, {{12,4}, "A"},
+            {{11,4}, "B"}, {{11,5}, "B"}, {{10,4}, "B"}, {{10,5}, "B"}, {{9,5}, "B"}, {{9,6}, "B"},
+            -- Level 3 additions
+            {{6,9}, "C"}, {{6,10}, "C"}, {{7,10}, "C"}, {{7,11}, "C"}, {{8,9}, "C"}, {{8,10}, "C"},
+            -- Level 4 additions
+            {{1,9}, "C"}, {{1,10}, "C"}, {{1,11}, "C"}, {{2,9}, "C"}, {{2,10}, "C"},
+            {{13,9}, "C"}, {{13,10}, "C"}, {{13,11}, "C"}, {{12,9}, "C"}, {{12,10}, "C"},
+            -- Level 5+ additions
+            {{4,6}, "A"}, {{4,7}, "A"}, {{5,7}, "A"}, {{5,8}, "A"},
+            {{9,7}, "E"}, {{9,8}, "E"}, {{10,6}, "E"}, {{10,7}, "E"},
+        }
+    end
+    
+    -- Place all pre-defined cells, but skip positions occupied by preserved towers
+    for _, cellData in ipairs(prePlacedCells) do
+        local pos = cellData[1]
+        local letter = cellData[2]
+        local row, col = pos[1], pos[2]
+        
+        if self:isValidGridPosition(row, col) then
+            local idx = (row - 1) * 20 + col
+            if self.cells[idx] and not self.cells[idx].permanent then
+                -- Check if this position is occupied by a preserved tower
+                local isOccupiedByTower = false
+                
+                -- Check tier one towers
+                if self.tierOnePositions[idx] then
+                    isOccupiedByTower = true
+                end
+                
+                -- Check tier two tower patterns
+                for _, tower in pairs(self.tierTwoPositions) do
+                    if tower.pattern then
+                        for _, patternIdx in ipairs(tower.pattern) do
+                            if patternIdx == idx then
+                                isOccupiedByTower = true
+                                break
+                            end
+                        end
+                    end
+                end
+                
+                -- Check tier three tower patterns
+                for _, tower in pairs(self.tierThreePositions) do
+                    if tower.pattern then
+                        for _, patternIdx in ipairs(tower.pattern) do
+                            if patternIdx == idx then
+                                isOccupiedByTower = true
+                                break
+                            end
+                        end
+                    end
+                end
+                
+                -- Only place bubble if no tower is there
+                if not isOccupiedByTower then
+                    self.cells[idx].ballType = letterTypes[letter]
+                    self.cells[idx].occupied = true
+                    self.cells[idx].tier = "basic"
+                end
+            end
+        end
+    end
+end
+--]]
+
 -- Simple ammo system helpers
 function Grid:getCurrentShooterBall()
-    if self.currentShotIndex <= 15 then
+    if self.currentShotIndex <= #self.ammo then
         return self.ammo[self.currentShotIndex]
     end
     return nil
 end
 
 function Grid:getOnDeckBall()
-    if self.currentShotIndex < 15 then
+    if self.currentShotIndex < #self.ammo then
         return self.ammo[self.currentShotIndex + 1]
     end
     return nil
 end
 
 function Grid:getShotsRemaining()
-    return math.max(0, 15 - self.currentShotIndex + 1)
+    return math.max(0, #self.ammo - self.currentShotIndex + 1)
 end
 
 -- Handle level completion: trigger finale for all levels
 function Grid:handleLevelCompletion()
+    print("LEVEL COMPLETION: All ammo used (shot " .. self.currentShotIndex .. " of " .. #self.ammo .. "), triggering finale sequence")
     -- Always trigger finale sequence (conversion and battle) for all levels
     self:convertBasicBubblesToCreeps()
 end
 
--- Advance to next level with new ammo and grid
+-- Advance to next level with tower preservation and grid overlay
 function Grid:advanceToNextLevel()
     self.currentLevel = self.currentLevel + 1
     
-    -- Reset ammo for new level
-    self.ammo = {}
+    -- Add 15 shots to the counter
     for i = 1, 15 do
-        self.ammo[i] = math.random(1, 5)
+        self.ammo[#self.ammo + 1] = math.random(1, 5)
     end
-    self.currentShotIndex = 1
+    -- Note: currentShotIndex stays the same to continue from current position
     
-    -- Clear existing grid (except permanent boundaries)
-    for idx, cell in pairs(self.cells) do
-        if not cell.permanent then
-            cell.occupied = false
-            cell.ballType = nil
-            cell.tier = nil
+    -- Store current tower positions for preservation
+    local preservedTierOnePositions = {}
+    local preservedTierTwoPositions = {}
+    local preservedTierThreePositions = {}
+    
+    -- Copy living towers to preserved tables
+    for idx, tower in pairs(self.tierOnePositions) do
+        if tower.hitpoints > 0 then
+            preservedTierOnePositions[idx] = tower
+        end
+    end
+    for idx, tower in pairs(self.tierTwoPositions) do
+        if tower.hitpoints > 0 then
+            preservedTierTwoPositions[idx] = tower
+        end
+    end
+    for idx, tower in pairs(self.tierThreePositions) do
+        if tower.hitpoints > 0 then
+            preservedTierThreePositions[idx] = tower
         end
     end
     
-    -- Clear tier tracking
-    self.tierOnePositions = {}
-    self.tierTwoPositions = {}
-    self.tierThreePositions = {}
+    -- Clear existing grid (except permanent boundaries and preserved towers)
+    for idx, cell in pairs(self.cells) do
+        if not cell.permanent then
+            -- Check if this cell is occupied by a preserved tower
+            local isPreservedTower = false
+            
+            -- Check tier one towers
+            if preservedTierOnePositions[idx] then
+                isPreservedTower = true
+            end
+            
+            -- Check tier two tower patterns
+            for towerIdx, tower in pairs(preservedTierTwoPositions) do
+                if tower.pattern then
+                    for _, patternIdx in ipairs(tower.pattern) do
+                        if patternIdx == idx then
+                            isPreservedTower = true
+                            break
+                        end
+                    end
+                end
+            end
+            
+            -- Check tier three tower patterns
+            for towerIdx, tower in pairs(preservedTierThreePositions) do
+                if tower.pattern then
+                    for _, patternIdx in ipairs(tower.pattern) do
+                        if patternIdx == idx then
+                            isPreservedTower = true
+                            break
+                        end
+                    end
+                end
+            end
+            
+            -- Only clear cells that don't have preserved towers
+            if not isPreservedTower then
+                cell.occupied = false
+                cell.ballType = nil
+                cell.tier = nil
+            end
+        end
+    end
     
-    -- Clear units
+    -- Restore preserved towers
+    self.tierOnePositions = preservedTierOnePositions
+    self.tierTwoPositions = preservedTierTwoPositions
+    self.tierThreePositions = preservedTierThreePositions
+    
+    -- Clear units and combat systems for fresh start
     self.creeps = {}
     self.troops = {}
     self.projectiles = {}
+    self.rainDots = {}
+    self.lightningEffects = {}
     self.stagingOccupied = {}
     self.rallyPointOccupied = {}
     
-    -- Reset systems
+    -- Reset combat systems
     self.finalAttackTriggered = false
     self.finalAttackDelay = nil
     self.finaleTriggered = false
@@ -694,19 +1077,48 @@ function Grid:advanceToNextLevel()
     self.troopShotCounter = 0
     self.troopMarchActive = false
     
-    -- Setup new starting grid based on new level
-    self:setupStartingBalls()
+    -- Setup new starting grid that respects preserved towers
+    self:setupStartingBallsWithTowerPreservation()
 end
 
 -- Check for victory condition or level advancement after all creeps defeated
 function Grid:checkForVictory()
-    if #self.creeps == 0 and self.finalAttackTriggered then
-        if self.currentLevel == 5 then
-            -- Final victory on level 5
-            self.gameState = "victory"
+    local creepCount = #self.creeps
+    local finalAttack = self.finalAttackTriggered
+    local hasConverted = self:hasConvertedCreeps()
+    
+    print("VICTORY CHECK: creeps=" .. creepCount .. ", finalAttackTriggered=" .. tostring(finalAttack) .. ", hasConverted=" .. tostring(hasConverted))
+    
+    if creepCount == 0 then
+        -- Two victory paths:
+        -- Path A: Regular combat creeps defeated (no converted creeps exist)
+        -- Path B: Finale converted creeps defeated (finalAttackTriggered required)
+        
+        local shouldAdvance = false
+        
+        if not hasConverted then
+            -- Path A: Regular combat victory - no converted creeps, advance immediately
+            print("VICTORY PATH A: Regular combat completed, advancing level")
+            shouldAdvance = true
+        elseif finalAttack then
+            -- Path B: Finale victory - all converted creeps defeated after final attack
+            print("VICTORY PATH B: Finale sequence completed, advancing level")
+            shouldAdvance = true
         else
-            -- Advance to next level (levels 1-4)
-            self:advanceToNextLevel()
+            -- Converted creeps exist but final attack not triggered yet - wait
+            print("VICTORY PENDING: Converted creeps exist but final attack not triggered")
+        end
+        
+        if shouldAdvance then
+            if self.currentLevel == 5 then
+                -- Final victory on level 5
+                print("VICTORY: Game completed! Level 5 finished.")
+                self.gameState = "victory"
+            else
+                -- Advance to next level (levels 1-4)
+                print("VICTORY: Level " .. self.currentLevel .. " completed! Advancing to level " .. (self.currentLevel + 1))
+                self:advanceToNextLevel()
+            end
         end
     end
 end
@@ -814,6 +1226,7 @@ function Grid:update()
     
     self:updateAnimations()
     self:updateCreeps()
+    self:checkForFinalAttack()  -- Check if converted creeps are staged and ready for final attack
     self:updateTroops()
     self:updateTowerCombat()
     self:updateProjectiles()
@@ -902,7 +1315,7 @@ function Grid:checkBallCollision()
                 local dx = self.ball.x - pos.x
                 local dy = self.ball.y - pos.y
                 local distSq = dx * dx + dy * dy
-                if distSq <= ((FLYING_BALL_RADIUS - 4) * (FLYING_BALL_RADIUS - 4)) then
+                if distSq <= ((FLYING_BALL_RADIUS - 3) * (FLYING_BALL_RADIUS - 3)) then
                     return true
                 end
             end
@@ -914,7 +1327,7 @@ function Grid:checkBallCollision()
         local dx = self.ball.x - tierOneData.centerX
         local dy = self.ball.y - tierOneData.centerY
         local distSq = dx * dx + dy * dy
-        local tier1Radius = 27 -- 36/2 + 9 for flying ball radius
+        local tier1Radius = 25 -- 36/2 + 7 for reasonable collision
         if distSq <= (tier1Radius * tier1Radius) then
             return true
         end
@@ -925,7 +1338,7 @@ function Grid:checkBallCollision()
         local dx = self.ball.x - tierTwoData.centerX
         local dy = self.ball.y - tierTwoData.centerY
         local distSq = dx * dx + dy * dy
-        local tier2Radius = 35 -- 52/2 + 9 for flying ball radius
+        local tier2Radius = 33 -- 52/2 + 7 for reasonable collision
         if distSq <= (tier2Radius * tier2Radius) then
             return true
         end
@@ -936,7 +1349,7 @@ function Grid:checkBallCollision()
         local dx = self.ball.x - tierThreeData.centerX
         local dy = self.ball.y - tierThreeData.centerY
         local distSq = dx * dx + dy * dy
-        local tier3Radius = 51 -- 84/2 + 9 for flying ball radius
+        local tier3Radius = 49 -- 84/2 + 7 for reasonable collision
         if distSq <= (tier3Radius * tier3Radius) then
             return true
         end
@@ -963,8 +1376,8 @@ function Grid:handleBallLanding()
         -- Check for merges
         self:checkForMerges(landingIdx)
         
-        -- Check if this was the final ball landing (shot 15) 
-        if self.currentShotIndex > 15 then
+        -- Check if this was the final ball landing (all ammo used)
+        if self.currentShotIndex > #self.ammo then
             self:handleLevelCompletion()
         end
         
@@ -1113,9 +1526,7 @@ function Grid:updateAnimations()
             if progress >= 1.0 then
                 -- Complete tier 1 placement - use the animation's end coordinates
                 self:placeTierOne(anim.triangle, anim.ballType, anim.endX, anim.endY)
-                -- Spawn troop from newly created tier 1
-                local rallyPos = self:getRandomRallyPoint()
-                self:spawnTroop(anim.endX, anim.endY, "tier1", TROOP_SIZE_TIER1, rallyPos)
+                -- Note: No longer spawn troops when towers form - towers are the defensive units
                 -- Don't keep this animation
             else
                 activeAnimations[#activeAnimations + 1] = anim
@@ -1159,9 +1570,7 @@ function Grid:updateAnimations()
                     currentTarget = nil
                 }
                 
-                -- Spawn troop from newly created tier 2
-                local rallyPos = self:getRandomRallyPoint()
-                self:spawnTroop(anim.endX, anim.endY, "tier2", TROOP_SIZE_TIER2, rallyPos)
+                -- Note: No longer spawn troops when towers form - towers are the defensive units
                 
                 -- Don't keep this animation
             else
@@ -1841,6 +2250,7 @@ end
 
 -- Convert all basic bubbles to creeps when final ball lands
 function Grid:convertBasicBubblesToCreeps()
+    print("CONVERSION START: Looking for basic bubbles to convert to creeps...")
     local basicBubbles = {}
     
     -- Find all basic bubbles on the grid
@@ -1906,7 +2316,7 @@ function Grid:convertBasicBubblesToCreeps()
         end
     end
     
-    print("FINAL CONVERSION: Converted " .. #basicBubbles .. " basic bubbles to creeps!")
+    print("FINAL CONVERSION: Converted " .. #basicBubbles .. " basic bubbles to creeps (CONVERTED FINALE), total creeps now: " .. #self.creeps)
 end
 
 -- Find staging position for converted creeps (distribute across all positions)
@@ -1975,12 +2385,21 @@ function Grid:checkForFinalAttack()
     -- Only check if we have converted creeps and haven't already triggered final attack
     if not self.finalAttackTriggered and self:hasConvertedCreeps() then
         local allConverted = self:areAllConvertedCreepsStaged()
+        print("FINAL ATTACK CHECK: hasConverted=true, allStaged=" .. tostring(allConverted))
         
         if allConverted then
             self.finalAttackTriggered = true
             self.finalAttackDelay = 30  -- 30-frame delay before final march
             print("FINAL ATTACK: All converted creeps staged! Attack launching in 30 frames...")
         end
+    elseif not self.finalAttackTriggered then
+        local regularCreeps = 0
+        for _, creep in ipairs(self.creeps) do
+            if not creep.converted then
+                regularCreeps = regularCreeps + 1
+            end
+        end
+        print("FINAL ATTACK CHECK: No converted creeps found, but " .. regularCreeps .. " regular combat creeps exist")
     end
     
     -- Handle final attack delay countdown
@@ -2123,10 +2542,10 @@ end
 function Grid:handleCreepCycle()
     local shotNumber = self.currentShotIndex
     
-    -- Don't spawn creeps on the final ball launch (shot 15)
-    if shotNumber >= 15 then
+    -- Don't spawn creeps on the final ball launch (when all ammo is used)
+    if shotNumber >= #self.ammo then
         -- Simple finale trigger when ammo is exhausted
-        local ammoExhausted = (self.currentShotIndex > 15)
+        local ammoExhausted = (self.currentShotIndex > #self.ammo)
         
         if ammoExhausted and not self.finaleTriggered then
             self.finaleTriggered = true
@@ -2226,6 +2645,7 @@ function Grid:spawnCreeps(count, tier, size)
             hasReachedRally = false    -- Track when creep reaches rally position
         }
     end
+    print("CREEP SPAWNED: " .. count .. "x " .. tier .. " creeps (REGULAR COMBAT) at staging " .. stagingIdx .. ", total creeps now: " .. #self.creeps)
 end
 
 -- Find available staging position - prefer empty, or choose position with fewest creeps of same tier
@@ -2438,9 +2858,9 @@ end
 -- ENHANCED: Get attack range for different creep types (ensures creeps get within tower range)
 function Grid:getCreepAttackRange(creep)
     if creep.tier == "tier1" then
-        -- Tier 1 ranged: Stop 10px from tower edge (tower radius + 10px)
+        -- Tier 1 ranged: Stop 15px from tower edge (tower radius + 15px)
         -- This keeps them within rain range (40px) while maintaining tactical distance
-        return TOWER_SPRITE_RADIUS + 10  -- 18 + 10 = 28px (within rain range)
+        return TOWER_SPRITE_RADIUS + 15  -- 18 + 15 = 33px (within rain range)
     elseif creep.tier == "tier2" then
         -- Tier 2 ranged: Stop 25px from tower edge (tower radius + 25px) 
         -- More cautious positioning while still within rain range
@@ -2554,11 +2974,23 @@ function Grid:updateCreeps()
     for i = #self.creeps, 1, -1 do
         local creep = self.creeps[i]
         
+        -- Safety check: skip if creep is nil or if array was cleared during level transition
+        if not creep or i > #self.creeps then
+            -- Only remove if index is still valid
+            if i <= #self.creeps then
+                table.remove(self.creeps, i)
+            end
+            goto continue
+        end
+        
         -- Remove dead creeps (suicide attacks, damage from towers)
         if creep.hitpoints <= 0 or creep.dead then
             self:checkStagingAvailability(creep.stagingIdx)
-            table.remove(self.creeps, i)
-            self:checkForVictory()
+            -- Bounds check before removal
+            if i <= #self.creeps then
+                table.remove(self.creeps, i)
+                self:checkForVictory()
+            end
             goto continue
         end
         
@@ -2573,8 +3005,11 @@ function Grid:updateCreeps()
                 if not towersRemain then
                     -- No towers left - allow creep to exit (victory for creeps)
                     self:checkStagingAvailability(creep.stagingIdx)
-                    table.remove(self.creeps, i)
-                    self:checkForVictory()  -- Check for victory after removing creep
+                    -- Bounds check before removal
+                    if i <= #self.creeps then
+                        table.remove(self.creeps, i)
+                        self:checkForVictory()  -- Check for victory after removing creep
+                    end
                 else
                     -- Towers still exist - creep shouldn't be leaving! Move them back to fight
                     creep.x = 0  -- Reset position to edge of screen to continue fighting
@@ -2978,8 +3413,10 @@ function Grid:drawBalls()
         self.bubbleSprites.tier1[tierOneData.ballType]:draw(
             tierOneData.centerX - 18, tierOneData.centerY - 18)
         
-        -- Draw HP bar above tower
-        self:drawTowerHPBar(tierOneData)
+        -- Draw HP bar above tower (only during combat phase)
+        if self:isCreepMarchActive() then
+            self:drawTowerHPBar(tierOneData)
+        end
     end
     
     -- Tier 2 bubbles (render at stored center positions)
@@ -2987,8 +3424,10 @@ function Grid:drawBalls()
         self.bubbleSprites.tier2[tierTwoData.sprite]:draw(
             tierTwoData.centerX - 26, tierTwoData.centerY - 26)
         
-        -- Draw HP bar above tower
-        self:drawTowerHPBar(tierTwoData)
+        -- Draw HP bar above tower (only during combat phase)
+        if self:isCreepMarchActive() then
+            self:drawTowerHPBar(tierTwoData)
+        end
     end
     
     -- Tier 3 bubbles (render at stored center positions, skip if currently flashing)
@@ -3126,6 +3565,12 @@ function Grid:updateTroops()
     for i = #self.troops, 1, -1 do
         local troop = self.troops[i]
         
+        -- Safety check: skip if troop is nil (can happen during level transitions)
+        if not troop then
+            table.remove(self.troops, i)
+            goto continue
+        end
+        
         if troop.marching then
             -- March right until offscreen
             troop.x = troop.x + TROOP_MARCH_SPEED
@@ -3154,6 +3599,7 @@ function Grid:updateTroops()
             -- Remove if offscreen (right edge)
             if troop.x > 420 then  -- Screen width + margin
                 table.remove(self.troops, i)
+                goto continue
             end
         elseif not troop.rallied then
             -- Find target: use troop's assigned rally point  
@@ -3179,6 +3625,8 @@ function Grid:updateTroops()
                 troop.y = clampedPos.y
             end
         end
+        
+        ::continue::
     end
     
     -- Handle all unit collisions (troops vs troops, troops vs creeps)
@@ -4028,8 +4476,8 @@ function Grid:lightningCreateProjectiles(tower)
     
     -- Check if we should start a new lightning sequence
     if not tower.lightningSequenceActive then
-        -- ENHANCED: Find priority target (Tier 2 > Tier 1 > Basic) within range
-        local target = self:findPriorityTargetForLightning(tower.centerX, tower.centerY, LIGHTNING_TOWER_RANGE)
+        -- FIXED: Find priority target within actual bolt range to avoid targeting out-of-range enemies
+        local target = self:findPriorityTargetForLightning(tower.centerX, tower.centerY, LIGHTNING_BOLT_RANGE)
         
         if not target then 
             tower.currentTarget = nil
@@ -4045,13 +4493,7 @@ function Grid:lightningCreateProjectiles(tower)
             tower.targetAngle = math.atan2(dy, dx)
         end
         
-        -- Calculate distance to target using shared helper
-        local distToTarget = self:calculateTargetDistance(tower, target)
-        
-        -- Only fire if target is within actual bolt range (not the multiplied firing range)
-        if distToTarget > LIGHTNING_BOLT_RANGE then
-            return  -- Don't fire if target is beyond bolt reach
-        end
+        -- Note: No additional range check needed since we already found target within bolt range
         
         -- Update tower rotation using shared helper
         self:updateTowerRotation(tower, tower.targetAngle, WIND_ROTATION_SPEED)
@@ -4296,7 +4738,25 @@ function Grid:updateBasicCreepAttacks(creep)
                 -- Check if tower is destroyed
                 if target.hitpoints <= 0 then
                     print("DESTROY: Tower destroyed by basic creep!")
-                    self:destroyTower(target)
+                    -- Determine tower type and call appropriate destroy function
+                    local foundInTier1 = false
+                    for idx, towerData in pairs(self.tierOnePositions) do
+                        if towerData == target then
+                            self:destroyTower(target)
+                            foundInTier1 = true
+                            break
+                        end
+                    end
+                    
+                    if not foundInTier1 then
+                        -- Must be a Tier 2 tower
+                        for idx, towerData in pairs(self.tierTwoPositions) do
+                            if towerData == target then
+                                self:destroyTowerTier2(target, idx)
+                                break
+                            end
+                        end
+                    end
                 end
                 
                 -- SUICIDE: Remove the creep after attack (suicide behavior)
@@ -4509,8 +4969,16 @@ function Grid:checkForDefeat()
     end
     
     if not hasTowers then
-        -- Player has lost - start game over sequence
-        self:startGameOverSequence()
+        -- All towers destroyed - creeps won this round, advance to next level
+        print("DEFEAT: All towers destroyed! Creeps won round " .. self.currentLevel .. ", advancing to level " .. (self.currentLevel + 1))
+        if self.currentLevel == 5 then
+            -- Final level - game over (creeps completely won)
+            print("GAME OVER: Creeps won the final level!")
+            self:startGameOverSequence()
+        else
+            -- Advance to next level after defeat
+            self:advanceToNextLevel()
+        end
     end
 end
 
@@ -4520,6 +4988,15 @@ end
 function Grid:updateProjectiles()
     for i = #self.projectiles, 1, -1 do
         local projectile = self.projectiles[i]
+        
+        -- Safety check: skip if projectile is nil or if array was cleared during level transition
+        if not projectile or i > #self.projectiles then
+            -- Only remove if index is still valid
+            if i <= #self.projectiles then
+                table.remove(self.projectiles, i)
+            end
+            goto continue
+        end
         
         -- Move projectile
         if projectile.towerType == 5 and projectile.spiralCenterVx then
@@ -4546,7 +5023,10 @@ function Grid:updateProjectiles()
         -- Early exit: check screen boundaries first (fastest check)
         if projectile.x < 0 or projectile.x > SCREEN_WIDTH or 
            projectile.y < 0 or projectile.y > SCREEN_HEIGHT then
-            table.remove(self.projectiles, i)
+            -- Bounds check before removal
+            if i <= #self.projectiles then
+                table.remove(self.projectiles, i)
+            end
             goto continue
         end
         
@@ -4569,7 +5049,10 @@ function Grid:updateProjectiles()
         
         -- Remove if traveled max range
         if distTraveled >= maxRange then
-            table.remove(self.projectiles, i)
+            -- Bounds check before removal
+            if i <= #self.projectiles then
+                table.remove(self.projectiles, i)
+            end
         else
             -- Check collision based on projectile type
             if projectile.creepType then
@@ -4590,9 +5073,21 @@ function Grid:updateRainDots()
     for i = #self.rainDots, 1, -1 do
         local dot = self.rainDots[i]
         
+        -- Safety check: skip if dot is nil or if array was cleared during level transition
+        if not dot or i > #self.rainDots then
+            -- Only remove if index is still valid
+            if i <= #self.rainDots then
+                table.remove(self.rainDots, i)
+            end
+            goto continue
+        end
+        
         -- Check if dot has expired (5 frames)
         if (self.frameCounter - dot.spawnFrame) >= RAIN_DOT_LIFETIME then
-            table.remove(self.rainDots, i)
+            -- Bounds check before removal
+            if i <= #self.rainDots then
+                table.remove(self.rainDots, i)
+            end
             goto continue
         end
         
@@ -4611,16 +5106,22 @@ function Grid:updateRainDots()
                 creep.hitpoints = creep.hitpoints - dot.damage
                 
                 -- Remove the dot (it gets consumed on hit)
-                table.remove(self.rainDots, i)
+                -- Bounds check before removal
+                if i <= #self.rainDots then
+                    table.remove(self.rainDots, i)
+                end
                 
                 -- Check if creep is dead
                 if creep.hitpoints <= 0 then
                     -- Free up staging position if this was the last creep there
                     self:checkStagingAvailability(creep.stagingIdx)
-                    table.remove(self.creeps, j)
-                    
-                    -- Check for victory after removing creep
-                    self:checkForVictory()
+                    -- Bounds check before removal
+                    if j <= #self.creeps then
+                        table.remove(self.creeps, j)
+                        
+                        -- Check for victory after removing creep
+                        self:checkForVictory()
+                    end
                 end
                 
                 goto continue  -- Dot is consumed, move to next dot
@@ -4636,6 +5137,12 @@ function Grid:updateLightningEffects()
     for i = #self.lightningEffects, 1, -1 do
         local effect = self.lightningEffects[i]
         
+        -- Safety check: skip if effect is nil (can happen during level transitions)
+        if not effect then
+            table.remove(self.lightningEffects, i)
+            goto continue
+        end
+        
         -- Decrease lifetime each frame
         effect.lifetime = effect.lifetime - 1
         
@@ -4643,6 +5150,8 @@ function Grid:updateLightningEffects()
         if effect.lifetime <= 0 then
             table.remove(self.lightningEffects, i)
         end
+        
+        ::continue::
     end
 end
 
@@ -4738,17 +5247,23 @@ function Grid:checkProjectileCreepCollision(projectile, projectileIndex)
                 
                 -- Remove projectile if it's not piercing
                 if not isPiercing then
-                    table.remove(self.projectiles, projectileIndex)
+                    -- Bounds check before removal
+                    if projectileIndex <= #self.projectiles then
+                        table.remove(self.projectiles, projectileIndex)
+                    end
                 end
                 
                 -- Check if creep is dead
                 if creep.hitpoints <= 0 then
                     -- Free up staging position if this was the last creep there
                     self:checkStagingAvailability(creep.stagingIdx)
-                    table.remove(self.creeps, i)
-                    
-                    -- Check for victory after removing creep
-                    self:checkForVictory()
+                    -- Bounds check before removal
+                    if i <= #self.creeps then
+                        table.remove(self.creeps, i)
+                        
+                        -- Check for victory after removing creep
+                        self:checkForVictory()
+                    end
                 end
                 
                 -- For piercing projectiles, continue processing other creeps
@@ -4780,7 +5295,10 @@ function Grid:checkCreepProjectileTowerCollision(projectile, projectileIndex)
                 tower.hitpoints = tower.hitpoints - projectile.damage
                 
                 -- Remove the projectile
-                table.remove(self.projectiles, projectileIndex)
+                -- Bounds check before removal
+                if projectileIndex <= #self.projectiles then
+                    table.remove(self.projectiles, projectileIndex)
+                end
                 
                 print("HIT: Tower hit by " .. projectile.creepType .. " projectile! Damage=" .. projectile.damage .. ", HP left=" .. tower.hitpoints)
                 
@@ -4812,7 +5330,10 @@ function Grid:checkCreepProjectileTowerCollision(projectile, projectileIndex)
                 tower.hitpoints = tower.hitpoints - projectile.damage
                 
                 -- Remove the projectile
-                table.remove(self.projectiles, projectileIndex)
+                -- Bounds check before removal
+                if projectileIndex <= #self.projectiles then
+                    table.remove(self.projectiles, projectileIndex)
+                end
                 
                 print("HIT: Tier 2 Tower hit by " .. projectile.creepType .. " projectile! Damage=" .. projectile.damage .. ", HP left=" .. tower.hitpoints)
                 
