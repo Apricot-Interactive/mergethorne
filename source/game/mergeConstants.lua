@@ -52,33 +52,28 @@ MergeConstants.TIER_2_NAMES = {
     [10] = "Chain Lightning" -- Water + Lightning
 }
 
--- Tier 3 combinations: Tier 2 + Tier 1 → Tier 3
--- Format: [tier2_sprite][tier1_type] = tier3_sprite
+-- Tier 3 combinations: Tier 2 + Tier 2 → Tier 3 tower
+-- Format: [tier2_sprite1][tier2_sprite2] = tier3_sprite (all return 1 - single sprite)
 MergeConstants.TIER_3_COMBINATIONS = {
-    [1] = {[3] = 1},  -- Steam + Tremor (Earth) = Geyser
-    [2] = {[5] = 2},  -- Magma + Gust (Wind) = Volcano  
-    [3] = {[4] = 3},  -- Quicksand + Shock (Lightning) = Sinkhole
-    [4] = {[3] = 4},  -- Downpour + Tremor (Earth) = Flood
-    [5] = {[2] = 5},  -- Sandstorm + Rain (Water) = Landslide
-    [6] = {[2] = 6},  -- Crystal + Rain (Water) = Blizzard
-    [7] = {[4] = 7},  -- Wild Fire + Shock (Lightning) = Phoenix
-    [8] = {[1] = 8},  -- Thunderstorm + Flame (Fire) = Hellfire
-    [9] = {[5] = 9},  -- Explosion + Gust (Wind) = Meteor
-    [10] = {[1] = 10} -- Chain Lightning + Flame (Fire) = Plasma
+    -- Tempest: Thunderstorm + Downpour
+    [8] = {[4] = 1}, [4] = {[8] = 1},
+    -- Ember: Magma + Wild Fire  
+    [2] = {[7] = 1}, [7] = {[2] = 1},
+    -- Chronus: Sandstorm + Quicksand
+    [5] = {[3] = 1}, [3] = {[5] = 1},
+    -- Prism: Steam + Explosion
+    [1] = {[9] = 1}, [9] = {[1] = 1},
+    -- Catalyst: Crystal + Chain Lightning
+    [6] = {[10] = 1}, [10] = {[6] = 1}
 }
 
--- Tier 3 result names
+-- Tier 3 tower names (all use sprite 1)
 MergeConstants.TIER_3_NAMES = {
-    [1] = "Geyser",      -- Steam + Earth
-    [2] = "Volcano",     -- Magma + Wind
-    [3] = "Sinkhole",    -- Quicksand + Lightning  
-    [4] = "Flood",       -- Downpour + Earth
-    [5] = "Landslide",   -- Sandstorm + Water
-    [6] = "Blizzard",    -- Crystal + Water
-    [7] = "Phoenix",     -- Wild Fire + Lightning
-    [8] = "Hellfire",    -- Thunderstorm + Fire
-    [9] = "Meteor",      -- Explosion + Wind
-    [10] = "Plasma"      -- Chain Lightning + Fire
+    [1] = "Tempest",     -- Thunderstorm + Downpour
+    [2] = "Ember",       -- Magma + Wild Fire
+    [3] = "Chronus",     -- Sandstorm + Quicksand
+    [4] = "Prism",       -- Steam + Explosion
+    [5] = "Catalyst"     -- Crystal + Chain Lightning
 }
 
 -- Helper function to get Tier 2 sprite from two Tier 1 types
@@ -106,9 +101,29 @@ MergeConstants.SPRITE_INFO = {
     }
 }
 
--- Helper function to get Tier 3 sprite from Tier 2 sprite + Tier 1 type  
-function MergeConstants.getTierThreeSprite(tier2Sprite, tier1Type)
-    return MergeConstants.TIER_3_COMBINATIONS[tier2Sprite] and MergeConstants.TIER_3_COMBINATIONS[tier2Sprite][tier1Type] or nil
+-- Helper function to get Tier 3 sprite from two Tier 2 sprites
+function MergeConstants.getTierThreeSprite(tier2Sprite1, tier2Sprite2)
+    return MergeConstants.TIER_3_COMBINATIONS[tier2Sprite1] and MergeConstants.TIER_3_COMBINATIONS[tier2Sprite1][tier2Sprite2] or nil
+end
+
+-- Helper function to get Tier 3 tower name from two Tier 2 sprites
+function MergeConstants.getTierThreeName(tier2Sprite1, tier2Sprite2)
+    local sprite = MergeConstants.getTierThreeSprite(tier2Sprite1, tier2Sprite2)
+    if sprite then
+        -- Determine which combination this is
+        if (tier2Sprite1 == 8 and tier2Sprite2 == 4) or (tier2Sprite1 == 4 and tier2Sprite2 == 8) then
+            return "Tempest"
+        elseif (tier2Sprite1 == 2 and tier2Sprite2 == 7) or (tier2Sprite1 == 7 and tier2Sprite2 == 2) then
+            return "Ember"
+        elseif (tier2Sprite1 == 5 and tier2Sprite2 == 3) or (tier2Sprite1 == 3 and tier2Sprite2 == 5) then
+            return "Chronus"
+        elseif (tier2Sprite1 == 1 and tier2Sprite2 == 9) or (tier2Sprite1 == 9 and tier2Sprite2 == 1) then
+            return "Prism"
+        elseif (tier2Sprite1 == 6 and tier2Sprite2 == 10) or (tier2Sprite1 == 10 and tier2Sprite2 == 6) then
+            return "Catalyst"
+        end
+    end
+    return nil
 end
 
 -- Helper function to get sprite offset for tier
