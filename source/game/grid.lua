@@ -1868,17 +1868,9 @@ end
 function Grid:finishLevelAdvancement()
     print("DEBUG: finishLevelAdvancement() called for level " .. self.currentLevel)
     
-    -- Wait for tower name display to complete (if any)
-    -- Only wait for timed displays, not persistent ones
-    if (self.towerNameTimer > 0 and not self.towerNamePersistent) or #self.pendingTowerNames > 0 then
-        print("DEBUG: Waiting for tower name display to complete before level advancement")
-        self.pendingLevelAdvancement = true -- Flag to retry after tower names finish
-        return -- Defer level advancement until tower names finish displaying
-    end
-    
-    -- Clear any persistent tower names before level advancement
-    if self.towerNamePersistent then
-        print("DEBUG: Clearing persistent tower name before level advancement")
+    -- Clear any tower name display before level advancement (level advancement takes priority)
+    if self.towerNameTimer > 0 or self.towerNamePersistent or #self.pendingTowerNames > 0 then
+        print("DEBUG: Clearing tower name display before level advancement")
         self:clearTowerName()
     end
     
@@ -2591,6 +2583,14 @@ function Grid:updateAnimations()
                     targetAngle = 0,
                     currentTarget = nil
                 }
+                
+                -- Show tower name (queue if during post-attack sequence)
+                local towerName = MergeConstants.TIER_2_NAMES[anim.sprite]
+                if self.isPostAttackSequence then
+                    self:queueTowerName(towerName)
+                else
+                    self:showTowerName(towerName, 30, true)  -- Persistent during shooting mode
+                end
                 
                 -- Note: No longer spawn troops when towers form - towers are the defensive units
                 
@@ -6013,6 +6013,36 @@ function Grid:resolveAllUnitCollisions()
         }
     end
     
+    -- Add all wardens
+    for _, warden in ipairs(self.wardens) do
+        if warden.hitpoints > 0 then
+            allUnits[#allUnits + 1] = {
+                x = warden.x,
+                y = warden.y,
+                size = warden.size / 2,  -- Half collision size for tighter packing
+                unit = warden,
+                type = "warden",
+                marching = false,
+                rallied = warden.rallyComplete or false
+            }
+        end
+    end
+    
+    -- Add all avatars
+    for _, avatar in ipairs(self.avatars) do
+        if avatar.hitpoints > 0 then
+            allUnits[#allUnits + 1] = {
+                x = avatar.x,
+                y = avatar.y,
+                size = avatar.size / 2,  -- Half collision size for tighter packing
+                unit = avatar,
+                type = "avatar",
+                marching = false,
+                rallied = avatar.rallyComplete or false
+            }
+        end
+    end
+    
     -- Check all pairs for collision
     for i = 1, #allUnits do
         for j = i+1, #allUnits do
@@ -6078,6 +6108,22 @@ function Grid:resolveAllUnitCollisions()
                         -- Update the working copies for this frame
                         u1.x = u1.unit.x
                         u1.y = u1.unit.y
+                        u2.x = u2.unit.x
+                        u2.y = u2.unit.y
+                    end
+                    
+                    -- Apply clamping for wardens and avatars to stay in valid area
+                    if u1.type == "warden" or u1.type == "avatar" then
+                        local clampedPos = self:clampToValidArea(u1.unit.x, u1.unit.y, u1.unit.size)
+                        u1.unit.x = clampedPos.x
+                        u1.unit.y = clampedPos.y
+                        u1.x = u1.unit.x
+                        u1.y = u1.unit.y
+                    end
+                    if u2.type == "warden" or u2.type == "avatar" then
+                        local clampedPos = self:clampToValidArea(u2.unit.x, u2.unit.y, u2.unit.size)
+                        u2.unit.x = clampedPos.x
+                        u2.unit.y = clampedPos.y
                         u2.x = u2.unit.x
                         u2.y = u2.unit.y
                     end

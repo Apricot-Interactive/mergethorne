@@ -1,28 +1,9 @@
-x Level 1 can only make basic towers. (defeating a wave gives an item)
-x Make the ball less sticky (smaller in flight) for skill shots.
-x Make doubles merge to avatars, not single+double.
-x Push the towers to the left, even if they merge, after level end
-x Update level starting arrays
-x Stomp more in favor of forming towers
-x Any T3s merge but some make avatars
-x Rain and Fire tower deal more damage (rain drops have invisible expanded hitboxes)
-x Update tower balance
-x Wind push locks T1 out of range but doesn't outrange T2
-x Quake tower aims faster
-x Add escalating enemies
-x Art for Tier 2 towers
-x Performance on playdate, esp Basic Creep
-x Spawn fewer basic creeps and they do dbl dmg
-x Wardens as Avatars for prototype
-x Add the goal of making the avatar (5 giants)
-x Remove dpad left debug and add confirm b on restart
-x Add announce box hint/text system
-
-o Tier 2 tower names not showing
 o Add base health and losing health
 o Escalating creep damage
 o Add game over from no health
 o Web build with up/down aim, up/down move, shoot and restart. And documentation
+
+o Documentation for submission: How to play, potential for AI and multiplayer, known issues (missing T2/warden abilities, win and lose condition).
 
 o Win counter for making 5 warden/avatars
 o When towers merge in the compact phase, the to be deleted towers stay on screen a bit after the new ones appear creating temporary confusion (although it is all resolving correctly)
@@ -47,3 +28,27 @@ Ember (Magma + Wild Fire)
 Chronus (Sandstorm + Quicksand)
 Prism (Steam + Explosion00)
 Catalyst (Crystal + Chain Lightning)
+
+DONE
+
+x Tier 2 tower names not showing
+x Occasional weirdness around next level start
+x Level 1 can only make basic towers. (defeating a wave gives an item)
+x Make the ball less sticky (smaller in flight) for skill shots.
+x Make doubles merge to avatars, not single+double.
+x Push the towers to the left, even if they merge, after level end
+x Update level starting arrays
+x Stomp more in favor of forming towers
+x Any T3s merge but some make avatars
+x Rain and Fire tower deal more damage (rain drops have invisible expanded hitboxes)
+x Update tower balance
+x Wind push locks T1 out of range but doesn't outrange T2
+x Quake tower aims faster
+x Add escalating enemies
+x Art for Tier 2 towers
+x Performance on playdate, esp Basic Creep
+x Spawn fewer basic creeps and they do dbl dmg
+x Wardens as Avatars for prototype
+x Add the goal of making the avatar (5 giants)
+x Remove dpad left debug and add confirm b on restart
+x Add announce box hint/text system
