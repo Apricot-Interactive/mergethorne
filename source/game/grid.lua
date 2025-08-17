@@ -124,7 +124,7 @@ local CREEP_HP_TIER2 <const> = 200  -- Tier 2 creeps: 67 hits from flame, 17 fro
 
 -- REBALANCED: Creep combat capabilities (Basic suicide, Tier 1+2 ranged)
 local CREEP_ATTACK_RANGE <const> = 30   -- Range for basic creep suicide attacks
-local CREEP_BASIC_DAMAGE <const> = 15   -- Basic creep suicide damage
+local CREEP_BASIC_DAMAGE <const> = 30   -- DOUBLED: Basic creep suicide damage
 local CREEP_ATTACK_COOLDOWN <const> = 25 -- Frames between basic creep attacks
 
 -- Basic creep charge system (activate within 20px of target)
@@ -166,13 +166,13 @@ local TIER2_RALLY_POSITIONS <const> = {
 
 -- Tier 1 ranged combat system (aggressive, close-range, balanced vs old suicide)
 local CREEP_TIER1_RANGE <const> = 80    -- Tier 1 shooting range (reduced to fire just before stopping)
-local CREEP_TIER1_DAMAGE <const> = 20   -- Tier 1 ranged damage per shot (balanced for sustained DPS)
+local CREEP_TIER1_DAMAGE <const> = 40   -- DOUBLED: Tier 1 ranged damage per shot (balanced for sustained DPS)
 local CREEP_TIER1_COOLDOWN <const> = 90 -- Tier 1 shot cooldown (1.5 seconds vs Tier 2's 1 sec)
 local CREEP_TIER1_MIN_DISTANCE <const> = 20 -- Tier 1s get twice as close (was 40 for Tier 2)
 
 -- Tier 2 ranged combat system (cautious, long-range)
 local CREEP_TIER2_RANGE <const> = 110   -- Tier 2 shooting range (reduced to fire just before stopping)
-local CREEP_TIER2_DAMAGE <const> = 25   -- Tier 2 ranged damage per shot
+local CREEP_TIER2_DAMAGE <const> = 50   -- DOUBLED: Tier 2 ranged damage per shot
 local CREEP_TIER2_COOLDOWN <const> = 60 -- Tier 2 shot cooldown (1 shot/second)
 local CREEP_TIER2_MIN_DISTANCE <const> = 40 -- Minimum distance Tier 2s maintain from targets
 
@@ -256,14 +256,14 @@ local TWO_PI <const> = math.pi * 2              -- 2π for angle normalization
 local PI_OVER_180 <const> = math.pi / 180      -- Degrees to radians conversion
 local SQRT_EPSILON <const> = 0.000001          -- Epsilon for sqrt comparisons
 
--- Flame Tower (ballType 1) - Rapid fire cone attacks
+-- Flame Tower (ballType 1) - Optimized cone attacks
 local FLAME_TOWER_RANGE <const> = 240          -- Detection/targeting range
-local FLAME_PROJECTILE_SPEED <const> = 1.25    -- Projectile velocity (pixels/frame)
+local FLAME_PROJECTILE_SPEED <const> = 1.5     -- Projectile velocity (pixels/frame) - faster travel
 local FLAME_PROJECTILE_RANGE <const> = 60      -- Distance projectiles travel before despawning
 local FLAME_CONE_ANGLE <const> = 15            -- ±15 degrees cone spread from aim direction
-local FLAME_PROJECTILE_DAMAGE <const> = 3      -- Enhanced damage per projectile (4.5 DPS target)
-local FLAME_PROJECTILES_PER_SHOT <const> = 3   -- Number of projectiles per attack
-local FLAME_TOWER_COOLDOWN <const> = 2         -- Frames between attacks (very rapid)
+local FLAME_PROJECTILE_DAMAGE <const> = 5      -- Enhanced damage per projectile (maintains DPS)
+local FLAME_PROJECTILES_PER_SHOT <const> = 2   -- Number of projectiles per attack (reduced)
+local FLAME_TOWER_COOLDOWN <const> = 3         -- Frames between attacks (slightly slower)
 local FLAME_ROTATION_SPEED <const> = math.pi / 15  -- 12° per frame = 360°/sec at 30fps
 
 -- Tremor Tower (ballType 3) - Precise arc shockwaves  
@@ -276,12 +276,12 @@ local TREMOR_TOWER_COOLDOWN <const> = 25       -- Frames between attacks (slower
 local TREMOR_ROTATION_SPEED <const> = math.pi / 15  -- 12° per frame = 360°/sec at 30fps
 local TREMOR_PROJECTILE_DAMAGE <const> = 5     -- Enhanced damage per projectile (3.0 DPS target)
 
--- Rain Tower (ballType 2) - Stationary damage dots
-local RAIN_DOTS_PER_FRAME <const> = 2          -- Number of dots spawned each frame (reduced for performance)
-local RAIN_DOT_LIFETIME <const> = 6            -- Frames each dot lasts (reduced for performance)
-local RAIN_DOT_DAMAGE <const> = 3              -- Enhanced damage per dot (3.0 DPS target)
+-- Rain Tower (ballType 2) - OPTIMIZED area damage system
+local RAIN_DAMAGE_PER_FRAME <const> = 1        -- Direct area damage per frame (optimized)
 local RAIN_INNER_RADIUS <const> = 10           -- Inner radius (tower radius)
-local RAIN_OUTER_RADIUS <const> = 50           -- Outer radius (tower radius + 40px) - increased by 10px
+local RAIN_OUTER_RADIUS <const> = 50           -- Outer radius (tower radius + 40px)
+local RAIN_VISUAL_DOTS <const> = 3             -- Visual dots for effect (much fewer)
+local RAIN_DOT_DISPLAY_FRAMES <const> = 8      -- How long visual dots persist
 
 -- Wind Tower (ballType 5) - Spirograph burst patterns
 local WIND_TOWER_RANGE <const> = 240           -- Detection/targeting range (same as others)
@@ -307,6 +307,18 @@ local LIGHTNING_BOLT_DAMAGE <const> = 35        -- Damage per bolt hit (was 12, 
 local LIGHTNING_BOLTS_PER_SEQUENCE <const> = 2  -- Number of bolts fired in sequence
 local LIGHTNING_SEQUENCE_DURATION <const> = 8   -- Frames for entire sequence (bolts at frame 1 and 5)
 local LIGHTNING_BOLT_LIFETIME <const> = 3       -- Frames each bolt remains visible
+
+-- DEVICE PERFORMANCE LIMITS - Prevent system overload on Playdate  
+local MAX_ACTIVE_CREEPS <const> = 25           -- Cap total creeps (increased to allow proper gameplay)
+local MAX_ACTIVE_PROJECTILES <const> = 40      -- Cap projectiles for consistent framerate
+local MAX_ACTIVE_RAIN_DOTS <const> = 8         -- Very low cap for visual rain dots
+local MAX_ACTIVE_LIGHTNING_EFFECTS <const> = 5 -- Cap lightning visual effects
+local PERFORMANCE_CHECK_INTERVAL <const> = 60  -- Check entity counts every N frames (less frequent)
+
+-- OBJECT POOLING - Reduce garbage collection pressure
+local POOL_SIZE_CREEPS <const> = 20             -- Pre-allocate creep objects
+local POOL_SIZE_TROOPS <const> = 30             -- Pre-allocate troop objects  
+local POOL_SIZE_PROJECTILES <const> = 40        -- Pre-allocate projectile objects
 local LIGHTNING_SEGMENTS_MIN <const> = 3        -- Minimum jagged line segments (more branches)
 local LIGHTNING_SEGMENTS_MAX <const> = 6        -- Maximum jagged line segments (up to 6 branches)
 local LIGHTNING_JITTER_RANGE <const> = 15       -- Pixels of random jitter for jagged effect
@@ -341,21 +353,22 @@ local TOWER_CONFIGS <const> = {
             piercing = false       -- Projectiles despawn on hit
         }
     },
-    [2] = { -- Rain Tower (Water)
+    [2] = { -- Rain Tower (Water) - OPTIMIZED
         name = "Rain",
-        range = 0,  -- No attack range - always active
-        projectileSpeed = 0,  -- Stationary dots
-        projectileRange = 0,  -- Dots don't move
-        projectileDamage = RAIN_DOT_DAMAGE,
-        projectilesPerShot = RAIN_DOTS_PER_FRAME,
-        cooldown = 1,  -- Spawn every frame
+        range = RAIN_OUTER_RADIUS,  -- Effective area damage range
+        projectileSpeed = 0,  -- No projectiles
+        projectileRange = 0,  -- Direct area damage
+        projectileDamage = RAIN_DAMAGE_PER_FRAME,
+        projectilesPerShot = 0,  -- No individual projectiles
+        cooldown = 1,  -- Area damage every frame
         rotationSpeed = 0,  -- No rotation needed
         special = {
-            dotLifetime = RAIN_DOT_LIFETIME,
+            areaAttack = true,     -- OPTIMIZED: Direct area damage
             innerRadius = RAIN_INNER_RADIUS,
             outerRadius = RAIN_OUTER_RADIUS,
+            damagePerFrame = RAIN_DAMAGE_PER_FRAME,
             variableRange = false, -- Fixed area
-            piercing = false       -- Dots despawn on hit
+            piercing = false       -- Area effect
         }
     },
     [3] = { -- Tremor Tower (Earth)
@@ -551,14 +564,14 @@ end
 function Grid:setupGameState()
     self.angle = 0
     self.ball = nil
-    -- Simple ammo system: array of balls (15 per level)
+    -- Simple ammo system: array of balls (12 per level)
     self.ammo = {}
-    for i = 1, 15 do
+    for i = 1, 12 do
         self.ammo[i] = math.random(1, 5)
     end
-    self.currentShotIndex = 1  -- Which shot we're on (1-15)
+    self.currentShotIndex = 1  -- Which shot we're on (1-12)
     self.currentLevel = 1      -- Which level we're on (1-5)
-    self.gameState = "playing"
+    self.gameState = "warden_intro"
     self.showDebug = false
     self.frameCounter = 0      -- Global frame counter for knockback cooldown
     
@@ -598,16 +611,177 @@ function Grid:setupGameState()
     self.rallyPointOccupied = {}  -- Track positions around rally point
     self.troopMarchActive = false  -- Track when troops are in march mode
     
-    -- Tower combat system
+    -- Tower combat system - OPTIMIZED
     self.projectiles = {}  -- {x, y, vx, vy, damage, towerType, lifespan, range}
-    self.rainDots = {}     -- {x, y, damage, lifetime, spawFrame, underTower} - stationary damage dots
+    self.rainVisualDots = {}  -- OPTIMIZED: Visual-only dots for rain effect
     self.lightningEffects = {}  -- {path, lifetime, damage, targetCreep} - instant lightning bolts
+    
+    -- Tower name display text box
+    self.towerNameText = ""  -- Current tower name to display
+    self.towerNameTimer = 0  -- Frames remaining to show current name
+    self.towerNamePersistent = false  -- If true, text stays until manually cleared
+    self.pendingTowerNames = {}  -- Queue of tower names to display sequentially
+    self.pendingLevelAdvancement = false  -- Flag to finish level advancement after tower names
+    
+    -- OBJECT POOLING - Pre-allocate objects to reduce garbage collection
+    self:initializeObjectPools()
+    
+    -- PERFORMANCE: Zone target caching for basic creeps
+    self.zoneTargetCache = {[1] = {}, [2] = {}, [3] = {}}
+    self.zoneTargetCacheValid = false
+    self.zoneTargetCacheFrame = 0  -- Last frame cache was updated
+    self.zoneCacheUpdateInterval = 4  -- Minimum frames between cache updates
+    self.zoneCacheNeedsUpdate = false  -- Delayed invalidation flag
     
     -- Precompute aim direction
     self:updateAimDirection()
     
     -- Add starting balls
     self:setupStartingBalls()
+end
+
+-- OBJECT POOLING: Initialize pre-allocated object pools
+function Grid:initializeObjectPools()
+    -- Creep object pool
+    self.creepPool = {}
+    self.creepPoolIndex = 1
+    for i = 1, POOL_SIZE_CREEPS do
+        self.creepPool[i] = {
+            x = 0, y = 0, tier = "basic", size = 3, hitpoints = 6, maxHitpoints = 6,
+            marching = false, animating = false, converted = false, stagingIdx = 0,
+            isDead = true  -- Start as dead/available
+        }
+    end
+    
+    -- Troop object pool
+    self.troopPool = {}
+    self.troopPoolIndex = 1
+    for i = 1, POOL_SIZE_TROOPS do
+        self.troopPool[i] = {
+            x = 0, y = 0, targetX = 0, targetY = 0, tier = "basic", size = 3,
+            marching = false, rallied = false, rallyX = 0, rallyY = 0,
+            isDead = true  -- Start as dead/available
+        }
+    end
+    
+    -- Projectile object pool
+    self.projectilePool = {}
+    self.projectilePoolIndex = 1
+    for i = 1, POOL_SIZE_PROJECTILES do
+        self.projectilePool[i] = {
+            x = 0, y = 0, vx = 0, vy = 0, damage = 1, towerType = 1,
+            startX = 0, startY = 0, maxRange = 60,
+            isDead = true  -- Start as dead/available
+        }
+    end
+end
+
+-- OBJECT POOLING: Get available objects from pools
+function Grid:getPooledCreep()
+    -- Find next available creep in pool
+    for i = 1, POOL_SIZE_CREEPS do
+        local creep = self.creepPool[self.creepPoolIndex]
+        self.creepPoolIndex = (self.creepPoolIndex % POOL_SIZE_CREEPS) + 1
+        
+        if creep.isDead then
+            creep.isDead = false
+            return creep
+        end
+    end
+    
+    -- Fallback: create new creep if pool exhausted
+    return {
+        x = 0, y = 0, tier = "basic", size = 3, hitpoints = 6, maxHitpoints = 6,
+        marching = false, animating = false, converted = false, stagingIdx = 0,
+        isDead = false
+    }
+end
+
+function Grid:getPooledTroop()
+    -- Find next available troop in pool
+    for i = 1, POOL_SIZE_TROOPS do
+        local troop = self.troopPool[self.troopPoolIndex]
+        self.troopPoolIndex = (self.troopPoolIndex % POOL_SIZE_TROOPS) + 1
+        
+        if troop.isDead then
+            troop.isDead = false
+            return troop
+        end
+    end
+    
+    -- Fallback: create new troop if pool exhausted
+    return {
+        x = 0, y = 0, targetX = 0, targetY = 0, tier = "basic", size = 3,
+        marching = false, rallied = false, rallyX = 0, rallyY = 0,
+        isDead = false
+    }
+end
+
+function Grid:getPooledProjectile()
+    -- Find next available projectile in pool
+    for i = 1, POOL_SIZE_PROJECTILES do
+        local projectile = self.projectilePool[self.projectilePoolIndex]
+        self.projectilePoolIndex = (self.projectilePoolIndex % POOL_SIZE_PROJECTILES) + 1
+        
+        if projectile.isDead then
+            projectile.isDead = false
+            return projectile
+        end
+    end
+    
+    -- Fallback: create new projectile if pool exhausted
+    return {
+        x = 0, y = 0, vx = 0, vy = 0, damage = 1, towerType = 1,
+        startX = 0, startY = 0, maxRange = 60,
+        isDead = false
+    }
+end
+
+-- PERFORMANCE: Rebuild zone target cache when towers change
+function Grid:rebuildZoneTargetCache()
+    -- PERFORMANCE: Early exit if no towers exist
+    local hasTowers = false
+    for _, _ in pairs(self.tierOnePositions) do hasTowers = true; break end
+    if not hasTowers then
+        for _, _ in pairs(self.tierTwoPositions) do hasTowers = true; break end
+    end
+    if not hasTowers then
+        for _, _ in pairs(self.tierThreePositions) do hasTowers = true; break end
+    end
+    
+    if not hasTowers then
+        -- No towers - clear cache and exit early
+        self.zoneTargetCache = {[1] = {}, [2] = {}, [3] = {}}
+        self.zoneTargetCacheValid = true
+        return
+    end
+    
+    -- Clear existing cache
+    self.zoneTargetCache = {[1] = {}, [2] = {}, [3] = {}}
+    
+    -- Group all living towers by zone
+    for idx, tower in pairs(self.tierOnePositions) do
+        if tower.hitpoints > 0 then
+            local zone = self:getTowerZone(tower.centerX)
+            table.insert(self.zoneTargetCache[zone], tower)
+        end
+    end
+    
+    for idx, tower in pairs(self.tierTwoPositions) do
+        if tower.hitpoints > 0 then
+            local zone = self:getTowerZone(tower.centerX)
+            table.insert(self.zoneTargetCache[zone], tower)
+        end
+    end
+    
+    for idx, tower in pairs(self.tierThreePositions) do
+        if tower.hitpoints > 0 then
+            local zone = self:getTowerZone(tower.centerX)
+            table.insert(self.zoneTargetCache[zone], tower)
+        end
+    end
+    
+    self.zoneTargetCacheValid = true
 end
 
 -- Get level-specific starting grid pattern (shared between all setup functions)
@@ -883,6 +1057,9 @@ end
 
 -- Handle level completion: trigger finale for all levels
 function Grid:handleLevelCompletion()
+    -- Clear tower name display for attack phase
+    self:clearTowerName()
+    
     -- Always trigger finale sequence (conversion and battle) for all levels
     self:convertBasicBubblesToCreeps()
 end
@@ -892,8 +1069,8 @@ function Grid:advanceToNextLevel()
     print("DEBUG: advanceToNextLevel() called - advancing from level " .. self.currentLevel .. " to " .. (self.currentLevel + 1))
     self.currentLevel = self.currentLevel + 1
     
-    -- Add 15 shots to the counter
-    for i = 1, 15 do
+    -- Add 12 shots to the counter
+    for i = 1, 12 do
         self.ammo[#self.ammo + 1] = math.random(1, 5)
     end
     -- Note: currentShotIndex stays the same to continue from current position
@@ -1619,10 +1796,18 @@ function Grid:createTierTwoImmediately(centerX, centerY, sprite)
         currentTarget = nil
     }
     
+    -- Show tower name (queue if during post-attack sequence)
+    local towerName = MergeConstants.TIER_2_NAMES[sprite]
+    if self.isPostAttackSequence then
+        self:queueTowerName(towerName)
+    else
+        self:showTowerName(towerName, 30, true)  -- Persistent during shooting mode
+    end
+    
     return centerIdx  -- Return the center index for chain merge checking
 end
 
--- Create Avatar immediately without animation
+-- Create Avatar immediately without animation (identical to warden properties)
 function Grid:createAvatarImmediately(centerX, centerY, sprite)
     print("DEBUG: Creating Avatar immediately at " .. centerX .. "," .. centerY)
     
@@ -1630,12 +1815,18 @@ function Grid:createAvatarImmediately(centerX, centerY, sprite)
     self.avatars[avatarId] = {
         x = centerX,
         y = centerY,
+        targetX = 40, -- Rally point (7,2) x coordinate
+        targetY = 104, -- Rally point (7,2) y coordinate  
         sprite = sprite,
-        hitpoints = AVATAR_HP,
-        targetX = nil,
-        targetY = nil,
-        attackCooldown = 0,
-        state = "ready"
+        hitpoints = math.floor(AVATAR_HP * 0.66), -- 792 HP
+        maxHitpoints = math.floor(AVATAR_HP * 0.66),
+        lightningCooldown = 0,
+        movementSpeed = 0.8,
+        state = "rallying",
+        tier = "avatar",
+        size = 16,
+        rallyComplete = false,
+        currentTarget = nil
     }
 end
 
@@ -1676,6 +1867,23 @@ end
 -- Original level advancement logic, now called after compacting sequence completes
 function Grid:finishLevelAdvancement()
     print("DEBUG: finishLevelAdvancement() called for level " .. self.currentLevel)
+    
+    -- Wait for tower name display to complete (if any)
+    -- Only wait for timed displays, not persistent ones
+    if (self.towerNameTimer > 0 and not self.towerNamePersistent) or #self.pendingTowerNames > 0 then
+        print("DEBUG: Waiting for tower name display to complete before level advancement")
+        self.pendingLevelAdvancement = true -- Flag to retry after tower names finish
+        return -- Defer level advancement until tower names finish displaying
+    end
+    
+    -- Clear any persistent tower names before level advancement
+    if self.towerNamePersistent then
+        print("DEBUG: Clearing persistent tower name before level advancement")
+        self:clearTowerName()
+    end
+    
+    -- Clear pending level advancement flag
+    self.pendingLevelAdvancement = false
     
     -- Ensure all Wardens have reached rally point before level starts
     self:ensureWardensRallied()
@@ -1783,7 +1991,7 @@ function Grid:finishLevelAdvancement()
     self.troops = {}
     -- Note: wardens and avatars are NOT cleared - they persist between levels like towers
     self.projectiles = {}
-    self.rainDots = {}
+    self.rainVisualDots = {}  -- OPTIMIZED: Visual-only dots
     self.lightningEffects = {}
     self.stagingOccupied = {}
     self.rallyPointOccupied = {}
@@ -1795,6 +2003,9 @@ function Grid:finishLevelAdvancement()
     self.finaleCountdown = nil
     self.troopShotCounter = 0
     self.troopMarchActive = false
+    
+    -- Clear tower name display for new level
+    self:clearTowerName()
     
     -- Setup new starting grid that respects preserved towers
     print("DEBUG: Calling setupStartingBallsWithTowerPreservation() for level " .. self.currentLevel)
@@ -1867,7 +2078,19 @@ end
 
 -- Main game input handling
 function Grid:handleInput()
-    if self.gameState == "gameOver" or self.gameState == "victory" then
+    if self.gameState == "warden_intro" then
+        if pd.buttonJustPressed(pd.kButtonA) then
+            self.gameState = "playing"
+        end
+        return
+    elseif self.gameState == "restart_confirm" then
+        if pd.buttonJustPressed(pd.kButtonB) then
+            self:init() -- Restart game
+        elseif pd.buttonJustPressed(pd.kButtonA) then
+            self.gameState = "playing" -- Continue playing
+        end
+        return
+    elseif self.gameState == "gameOver" or self.gameState == "victory" then
         if pd.buttonJustPressed(pd.kButtonA) then
             self:init() -- Restart game
         end
@@ -1920,10 +2143,13 @@ function Grid:handleInput()
         self:updateAimDirection()
     end
     
-    if pd.buttonJustPressed(pd.kButtonLeft) then
-        self.showDebug = not self.showDebug
-    elseif pd.buttonJustPressed(pd.kButtonB) then
-        self:init() -- Reset level to starting state
+    -- Debug mode disabled
+    -- if pd.buttonJustPressed(pd.kButtonLeft) then
+    --     self.showDebug = not self.showDebug
+    -- end
+    
+    if pd.buttonJustPressed(pd.kButtonB) then
+        self.gameState = "restart_confirm" -- Show confirmation popup
     elseif pd.buttonJustPressed(pd.kButtonA) and not self.ball and 
            self:getCurrentShooterBall() and not self.isAnimating then
         self:shootBall()
@@ -1978,8 +2204,12 @@ function Grid:update()
     self:updateAvatars()
     self:updateTowerCombat()
     self:updateProjectiles()
-    self:updateRainDots()
+    self:updateRainVisualDots()  -- OPTIMIZED: Visual-only updates
     self:updateLightningEffects()
+    self:updateTowerNameDisplay()
+    
+    -- DEVICE PERFORMANCE: Enforce entity limits periodically
+    self:enforcePerformanceLimits()
     
     -- Handle finale countdown (runs every frame)
     if self.finaleTriggered and self.finaleCountdown then
@@ -2115,11 +2345,29 @@ function Grid:checkBallCollision()
         end
     end
     
+    -- Check mobile avatar units (identical collision to wardens)
+    for _, avatar in ipairs(self.avatars) do
+        if avatar.hitpoints > 0 then
+            local dx = self.ball.x - avatar.x
+            local dy = self.ball.y - avatar.y
+            local distSq = dx * dx + dy * dy
+            local avatarRadius = avatar.size / 2 + 5 -- 16/2 + 5 = 13px collision radius
+            if distSq <= (avatarRadius * avatarRadius) then
+                return true
+            end
+        end
+    end
+    
     return false
 end
 
 -- Handle ball landing after collision
 function Grid:handleBallLanding()
+    -- Clear any persistent tower name from previous shot
+    if self.towerNamePersistent then
+        self:clearTowerName()
+    end
+    
     local landingIdx = self:findNearestValidCell(self.ball.x, self.ball.y)
     
     if landingIdx and self:isLegalPlacement(landingIdx) then
@@ -2171,6 +2419,9 @@ function Grid:checkForMerges(startIdx)
     local chain = self:findMergeChain(startIdx)
     if #chain >= 3 then
         self:startMergeAnimation(chain)
+    else
+        -- No merge happened, clear tower name display
+        self:clearTowerName()
     end
 end
 
@@ -2363,11 +2614,11 @@ function Grid:updateAnimations()
                 
                 if anim.unitType == "warden" then
                     print("DEBUG: tier3_magnetism complete - creating WARDEN at " .. anim.endX .. "," .. anim.endY)
-                    self:placeTierThreeWarden(anim.endX, anim.endY, anim.sprite)
+                    self:placeTierThreeWarden(anim.endX, anim.endY, anim.sprite, anim.tierTwoA.sprite, anim.tierTwoB.sprite)
                 else
                     -- Default to avatar
                     print("DEBUG: tier3_magnetism complete - creating AVATAR at " .. anim.endX .. "," .. anim.endY)
-                    self:placeTierThree(anim.endX, anim.endY, anim.sprite)
+                    self:placeTierThree(anim.endX, anim.endY, anim.sprite, anim.tierTwoA.sprite, anim.tierTwoB.sprite)
                 end
                 
                 -- Check if this is part of post-attack sequence
@@ -2467,6 +2718,15 @@ function Grid:updateAnimations()
                     pattern = anim.pattern
                 }
                 
+                -- Show tower name based on the tier 2 sprites that created it
+                local towerName = MergeConstants.getTierThreeName(anim.tier2SpriteA, anim.tier2SpriteB)
+                towerName = towerName or "Warden"  -- Fallback for generic wardens
+                if self.isPostAttackSequence then
+                    self:queueTowerName(towerName)
+                else
+                    self:showTowerName(towerName, 30, true)  -- Persistent during shooting mode
+                end
+                
                 -- Start flashing animation (3 flashes over 1 second = 60 frames)
                 self.animations[#self.animations + 1] = {
                     type = "tier3_flash",
@@ -2527,6 +2787,8 @@ function Grid:updateAnimations()
                     centerY = anim.endY,
                     sprite = anim.sprite,
                     pattern = anim.pattern,
+                    tier2SpriteA = anim.tier2SpriteA, -- for warden name display
+                    tier2SpriteB = anim.tier2SpriteB, -- for warden name display
                     frame = 0,
                     flashCount = 0  -- Track number of flashes completed
                 }
@@ -2551,19 +2813,23 @@ function Grid:updateAnimations()
             -- After 80 frames and 8 flashes (3 visible appearances + final off)
             if anim.frame >= 80 and anim.flashCount >= 8 then
                 print("DEBUG: Avatar flash complete, creating mobile avatar unit")
-                -- Create Avatar at tower position (rallies like warden)
+                -- Create Avatar at tower position (identical to warden properties)
                 local avatarId = #self.avatars + 1
                 self.avatars[avatarId] = {
                     x = anim.centerX,
                     y = anim.centerY,
+                    targetX = 40, -- Rally point (7,2) x coordinate  
+                    targetY = 104, -- Rally point (7,2) y coordinate  
                     sprite = anim.sprite,
-                    hitpoints = AVATAR_HP,
-                    targetX = 40, -- Rally point (7,2) x coordinate - same as warden  
-                    targetY = 104, -- Rally point (7,2) y coordinate - same as warden
-                    attackCooldown = 0,
-                    state = "rallying", -- "rallying", "combat", "attacking"
-                    lastShotTime = 0,
-                    rallyComplete = false
+                    hitpoints = math.floor(AVATAR_HP * 0.66), -- 792 HP
+                    maxHitpoints = math.floor(AVATAR_HP * 0.66),
+                    lightningCooldown = 0,
+                    movementSpeed = 0.8, -- Slightly slower than basic troops
+                    state = "rallying", -- "rallying", "combat", "dead"
+                    tier = "avatar",
+                    size = 16, -- 16x16 sprite
+                    rallyComplete = false,
+                    currentTarget = nil -- For combat targeting
                 }
                 print("DEBUG: Avatar " .. avatarId .. " created at (" .. anim.centerX .. "," .. anim.centerY .. ") - rallying to (40,104)")
                 
@@ -2609,6 +2875,15 @@ function Grid:updateAnimations()
                     currentTarget = nil -- For combat targeting
                 }
                 print("DEBUG: Warden " .. wardenId .. " created at (" .. anim.centerX .. "," .. anim.centerY .. ") - rallying to (40,104)")
+                
+                -- Show warden name based on the tier 2 sprites that created it
+                local wardenName = MergeConstants.getTierThreeName(anim.tier2SpriteA, anim.tier2SpriteB)
+                wardenName = wardenName or "Warden"  -- Fallback for generic wardens
+                if self.isPostAttackSequence then
+                    self:queueTowerName(wardenName)
+                else
+                    self:showTowerName(wardenName, 30, true)  -- Persistent during shooting mode
+                end
                 
                 -- Despawn the tier 3 bubble - clear from grid and tracking (wardens are mobile)
                 for _, idx in ipairs(anim.pattern) do
@@ -2850,6 +3125,17 @@ function Grid:placeTierOne(triangle, ballType, centerX, centerY)
         targetAngle = 0
     }
     
+    -- Show tower name (queue if during post-attack sequence)  
+    local towerName = MergeConstants.BASIC_NAMES[ballType] .. " Tower"
+    if self.isPostAttackSequence then
+        self:queueTowerName(towerName)
+    else
+        self:showTowerName(towerName, 30, true)  -- Persistent during shooting mode
+    end
+    
+    -- PERFORMANCE: Mark zone target cache for delayed update when new tower is created
+    self.zoneCacheNeedsUpdate = true
+    
     -- Start 8-frame delay before checking magnetism
     self.magnetismDelayCounter = 8
 end
@@ -2990,6 +3276,11 @@ end
 
 -- Start tier 3 magnetism animation (between two Tier 2 bubbles)
 function Grid:startTierThreeMagnetism(tierTwoA, tierTwoB, sprite, unitType)
+    -- Clear any persistent tower name when starting magnetic merge during shooting
+    if not self.isPostAttackSequence and self.towerNamePersistent then
+        self:clearTowerName()
+    end
+    
     local midpointX = (tierTwoA.centerX + tierTwoB.centerX) / 2
     local midpointY = (tierTwoA.centerY + tierTwoB.centerY) / 2
     
@@ -3008,6 +3299,11 @@ end
 
 -- Start tier 2 magnetism animation
 function Grid:startTierTwoMagnetism(tierOne1, tierOne2)
+    -- Clear any persistent tower name when starting magnetic merge during shooting
+    if not self.isPostAttackSequence and self.towerNamePersistent then
+        self:clearTowerName()
+    end
+    
     local midpointX = (tierOne1.centerX + tierOne2.centerX) / 2
     local midpointY = (tierOne1.centerY + tierOne2.centerY) / 2
     local sprite = self:getTierTwoSprite(tierOne1.ballType, tierOne2.ballType)
@@ -3363,7 +3659,7 @@ function Grid:placeTierTwo(centerX, centerY, sprite)
 end
 
 -- Place tier 3 bubble with grid snapping animation  
-function Grid:placeTierThree(centerX, centerY, sprite)
+function Grid:placeTierThree(centerX, centerY, sprite, tier2SpriteA, tier2SpriteB)
     -- Find valid position for full 19-cell pattern
     local centerIdx, pattern = self:findValidTierThreePlacement(centerX, centerY)
     if not centerIdx then 
@@ -3387,6 +3683,8 @@ function Grid:placeTierThree(centerX, centerY, sprite)
         centerIdx = centerIdx,
         pattern = pattern,          -- store the validated 19-cell pattern
         sprite = sprite,
+        tier2SpriteA = tier2SpriteA, -- for tower name display
+        tier2SpriteB = tier2SpriteB, -- for tower name display
         frame = 0
     }
     self.isAnimating = true
@@ -3394,7 +3692,7 @@ function Grid:placeTierThree(centerX, centerY, sprite)
 end
 
 -- Place Warden unit (uses troops-tier-two.png sprite, 66% avatar HP, mobile lightning tower)
-function Grid:placeTierThreeWarden(centerX, centerY, sprite)
+function Grid:placeTierThreeWarden(centerX, centerY, sprite, tier2SpriteA, tier2SpriteB)
     -- Find valid position for full 19-cell pattern (same as avatar)
     local centerIdx, pattern = self:findValidTierThreePlacement(centerX, centerY)
     if not centerIdx then 
@@ -3418,6 +3716,8 @@ function Grid:placeTierThreeWarden(centerX, centerY, sprite)
         centerIdx = centerIdx,
         pattern = pattern,          -- store the validated 19-cell pattern
         sprite = sprite,
+        tier2SpriteA = tier2SpriteA, -- for warden name display
+        tier2SpriteB = tier2SpriteB, -- for warden name display
         frame = 0
     }
     self.isAnimating = true
@@ -3620,51 +3920,59 @@ function Grid:convertBasicBubblesToCreeps()
         end
     end
     
-    -- Convert each basic bubble to a creep
+    -- Convert each basic bubble to a creep (50/50 chance)
     for _, bubble in ipairs(basicBubbles) do
-        -- Clear the bubble from the grid
-        self.cells[bubble.idx].occupied = false
-        self.cells[bubble.idx].ballType = nil
-        self.cells[bubble.idx].tier = "basic"
-        
-        -- Find a staging position for this creep (prefer spreading them out)
-        local stagingIdx = self:findStagingForConvertedCreep()
-        local stagingPos = self.positions[stagingIdx]
-        
-        if stagingPos then
-            -- Create arc path with variance for chaotic movement
-            local arcParams = self:calculateArcPath(bubble.x, bubble.y, stagingPos.x, stagingPos.y)
+        -- BALANCE: 50/50 chance for each bubble to spawn a creep
+        if math.random() <= 0.5 then
+            -- Clear the bubble from the grid
+            self.cells[bubble.idx].occupied = false
+            self.cells[bubble.idx].ballType = nil
+            self.cells[bubble.idx].tier = "basic"
             
-            -- Add converted creep with arc movement
-            self.creeps[#self.creeps + 1] = {
-                x = bubble.x,
-                y = bubble.y,
-                targetX = stagingPos.x,
-                targetY = stagingPos.y,
-                animating = true,
-                staged = false,
-                stagingIdx = stagingIdx,
-                tier = "basic",
-                size = 3,
-                marching = false,
-                converted = true,  -- Mark as converted from bubble
-                hitpoints = CREEP_HP_BASIC,
-                maxHitpoints = CREEP_HP_BASIC,
-                lastAttackTime = 0,
-                -- Simple collision avoidance
-                lastDirection = 0,  -- -1 = up, 1 = down, 0 = none
-                -- Arc movement parameters
-                arcStartX = bubble.x,
-                arcStartY = bubble.y,
-                arcEndX = stagingPos.x,
-                arcEndY = stagingPos.y,
-                arcMidX = arcParams.midX,
-                arcMidY = arcParams.midY,
-                arcProgress = 0  -- 0 to 1 for arc progression
-            }
+            -- Find a staging position for this creep (prefer spreading them out)
+            local stagingIdx = self:findStagingForConvertedCreep()
+            local stagingPos = self.positions[stagingIdx]
             
-            -- Mark staging position as having creeps
-            self.stagingOccupied[stagingIdx] = true
+            if stagingPos then
+                -- Create arc path with variance for chaotic movement
+                local arcParams = self:calculateArcPath(bubble.x, bubble.y, stagingPos.x, stagingPos.y)
+                
+                -- Add converted creep with arc movement
+                self.creeps[#self.creeps + 1] = {
+                    x = bubble.x,
+                    y = bubble.y,
+                    targetX = stagingPos.x,
+                    targetY = stagingPos.y,
+                    animating = true,
+                    staged = false,
+                    stagingIdx = stagingIdx,
+                    tier = "basic",
+                    size = 3,
+                    marching = false,
+                    converted = true,  -- Mark as converted from bubble
+                    hitpoints = CREEP_HP_BASIC,
+                    maxHitpoints = CREEP_HP_BASIC,
+                    lastAttackTime = 0,
+                    -- Simple collision avoidance
+                    lastDirection = 0,  -- -1 = up, 1 = down, 0 = none
+                    -- Arc movement parameters
+                    arcStartX = bubble.x,
+                    arcStartY = bubble.y,
+                    arcEndX = stagingPos.x,
+                    arcEndY = stagingPos.y,
+                    arcMidX = arcParams.midX,
+                    arcMidY = arcParams.midY,
+                    arcProgress = 0  -- 0 to 1 for arc progression
+                }
+                
+                -- Mark staging position as having creeps
+                self.stagingOccupied[stagingIdx] = true
+            end
+        else
+            -- BALANCE: Bubble didn't convert - clear it from the grid anyway
+            self.cells[bubble.idx].occupied = false
+            self.cells[bubble.idx].ballType = nil
+            self.cells[bubble.idx].tier = "basic"
         end
     end
     
@@ -4174,12 +4482,15 @@ function Grid:updateStandAndFightMovement(creep)
         -- Move toward the locked target tower
         local dx = target.centerX - creep.x
         local dy = target.centerY - creep.y
-        local dist = math.sqrt(dx*dx + dy*dy)
+        local distSquared = dx*dx + dy*dy
         
         -- Only move if not in attack range (varies by creep type)
         local attackRange = self:getCreepAttackRange(creep)
+        local attackRangeSquared = attackRange * attackRange
         
-        if dist > attackRange then
+        if distSquared > attackRangeSquared then
+            -- PERFORMANCE: Only calculate sqrt when we actually need to move
+            local dist = math.sqrt(distSquared)
             -- Calculate movement speed (basic creeps move twice as fast)
             local moveSpeed = CREEP_MARCH_SPEED
             
@@ -4277,32 +4588,17 @@ end
 
 -- Find target tower using zone-based priority system
 function Grid:findZoneBasedTarget(creep)
-    -- Group towers by zone
-    local zoneTargets = {[1] = {}, [2] = {}, [3] = {}}
+    -- PERFORMANCE: Use cached zone targets with frequency limiting and delayed updates
+    local framesSinceUpdate = self.frameCounter - self.zoneTargetCacheFrame
+    local needsUpdate = not self.zoneTargetCacheValid or self.zoneCacheNeedsUpdate
     
-    for idx, tower in pairs(self.tierOnePositions) do
-        if tower.hitpoints > 0 then  -- Only consider living towers
-            local zone = self:getTowerZone(tower.centerX)
-            table.insert(zoneTargets[zone], tower)
-        end
+    if needsUpdate and framesSinceUpdate >= self.zoneCacheUpdateInterval then
+        self:rebuildZoneTargetCache()
+        self.zoneTargetCacheFrame = self.frameCounter
+        self.zoneCacheNeedsUpdate = false  -- Clear the delayed update flag
     end
     
-    for idx, tower in pairs(self.tierTwoPositions) do
-        if tower.hitpoints > 0 then  -- Only consider living towers
-            local zone = self:getTowerZone(tower.centerX)
-            table.insert(zoneTargets[zone], tower)
-        end
-    end
-    
-    for idx, tower in pairs(self.tierThreePositions) do
-        if tower.hitpoints > 0 then  -- Only consider living towers
-            local zone = self:getTowerZone(tower.centerX)
-            table.insert(zoneTargets[zone], tower)
-        end
-    end
-    
-    -- Note: Mobile Wardens don't participate in zone-based targeting like towers
-    -- Creeps target towers first, then can target mobile units independently
+    local zoneTargets = self.zoneTargetCache
     
     -- If creep has current target in same zone, continue targeting that zone
     local currentZone = nil
@@ -4335,16 +4631,17 @@ end
 -- Find closest tower within a specific zone
 function Grid:findClosestTowerInZone(creep, zoneTowers)
     local closestTower = nil
-    local closestDist = math.huge
+    local closestDistSquared = math.huge
     
+    -- PERFORMANCE: Use squared distances to avoid expensive sqrt calculations
     for _, tower in ipairs(zoneTowers) do
         local dx = tower.centerX - creep.x
         local dy = tower.centerY - creep.y
-        local dist = math.sqrt(dx*dx + dy*dy)
+        local distSquared = dx*dx + dy*dy
         
-        if dist < closestDist then
+        if distSquared < closestDistSquared then
             closestTower = tower
-            closestDist = dist
+            closestDistSquared = distSquared
         end
     end
     
@@ -4386,7 +4683,7 @@ function Grid:updateCreeps()
             goto continue
         end
         
-        -- Remove dead creeps (suicide attacks, damage from towers)
+        -- Remove dead creeps immediately (REVERTED: gameplay critical)
         if creep.hitpoints <= 0 or creep.dead then
             self:checkStagingAvailability(creep.stagingIdx)
             -- Bounds check before removal
@@ -4541,14 +4838,17 @@ function Grid:checkTowerCollision(creep, testX, testY)
         if tower.hitpoints > 0 then  -- Only check living towers
             local dx = tower.centerX - testX
             local dy = tower.centerY - testY
-            local dist = math.sqrt(dx*dx + dy*dy)
+            local distSquared = dx*dx + dy*dy
             local towerRadius = TOWER_SPRITE_RADIUS
             local creepRadius = creep.size / 2
             
-            -- Check barriers
-            if dist <= towerRadius + creepRadius + 2 then
+            -- PERFORMANCE: Check barriers using squared distances (avoid expensive sqrt)
+            local hardCollisionRadius = towerRadius + creepRadius + 2
+            local wakeUpRadius = towerRadius + creepRadius + 10
+            
+            if distSquared <= (hardCollisionRadius * hardCollisionRadius) then
                 return "hard_collision", tower  -- 2px hard barrier
-            elseif dist <= towerRadius + creepRadius + 10 then
+            elseif distSquared <= (wakeUpRadius * wakeUpRadius) then
                 return "wake_up", tower  -- 10px wake-up barrier
             end
         end
@@ -4558,19 +4858,43 @@ function Grid:checkTowerCollision(creep, testX, testY)
         if tower.hitpoints > 0 then  -- Only check living towers
             local dx = tower.centerX - testX
             local dy = tower.centerY - testY
-            local dist = math.sqrt(dx*dx + dy*dy)
+            local distSquared = dx*dx + dy*dy
             local towerRadius = TOWER_SPRITE_RADIUS + 8  -- Larger footprint for Tier 2
             local creepRadius = creep.size / 2
             
-            -- Check barriers
-            if dist <= towerRadius + creepRadius + 2 then
+            -- PERFORMANCE: Check barriers using squared distances (avoid expensive sqrt)
+            local hardCollisionRadius = towerRadius + creepRadius + 2
+            local wakeUpRadius = towerRadius + creepRadius + 10
+            
+            if distSquared <= (hardCollisionRadius * hardCollisionRadius) then
                 return "hard_collision", tower  -- 2px hard barrier
-            elseif dist <= towerRadius + creepRadius + 10 then
+            elseif distSquared <= (wakeUpRadius * wakeUpRadius) then
                 return "wake_up", tower  -- 10px wake-up barrier
             end
         end
     end
     return "clear", nil
+end
+
+-- OPTIMIZED: Clean up dead creeps efficiently without table.remove in loops
+function Grid:cleanupDeadCreeps()
+    local livingCreeps = {}
+    local deadCount = 0
+    
+    for _, creep in ipairs(self.creeps) do
+        if not creep.isDead then
+            livingCreeps[#livingCreeps + 1] = creep
+        else
+            deadCount = deadCount + 1
+        end
+    end
+    
+    self.creeps = livingCreeps  -- Replace with cleaned array (much faster than table.remove)
+    
+    -- Check for victory if any creeps were removed
+    if deadCount > 0 then
+        self:checkForVictory()
+    end
 end
 
 -- Tower-aware collision avoidance - respects stand and fight targeting
@@ -4675,12 +4999,13 @@ function Grid:checkTowerCollisionRelaxed(creep, testX, testY)
         if tower.hitpoints > 0 then  -- Only check living towers
             local dx = tower.centerX - testX
             local dy = tower.centerY - testY
-            local dist = math.sqrt(dx*dx + dy*dy)
+            local distSquared = dx*dx + dy*dy
             local towerRadius = TOWER_SPRITE_RADIUS
             local creepRadius = creep.size / 2
             
-            -- Only block at 1px hard barrier (no wake-up zone in relaxed mode)
-            if dist <= towerRadius + creepRadius + 1 then
+            -- PERFORMANCE: Use squared distance comparison to avoid sqrt
+            local collisionRadius = towerRadius + creepRadius + 1
+            if distSquared <= collisionRadius * collisionRadius then
                 return "hard_collision"
             end
         end
@@ -4690,12 +5015,13 @@ function Grid:checkTowerCollisionRelaxed(creep, testX, testY)
         if tower.hitpoints > 0 then  -- Only check living towers
             local dx = tower.centerX - testX
             local dy = tower.centerY - testY
-            local dist = math.sqrt(dx*dx + dy*dy)
+            local distSquared = dx*dx + dy*dy
             local towerRadius = TOWER_SPRITE_RADIUS + 8  -- Larger footprint for Tier 2
             local creepRadius = creep.size / 2
             
-            -- Only block at 1px hard barrier (no wake-up zone in relaxed mode)
-            if dist <= towerRadius + creepRadius + 1 then
+            -- PERFORMANCE: Use squared distance comparison to avoid sqrt
+            local collisionRadius = towerRadius + creepRadius + 1
+            if distSquared <= collisionRadius * collisionRadius then
                 return "hard_collision"
             end
         end
@@ -4707,6 +5033,59 @@ end
 -- Old creep collision function removed - now handled by resolveAllUnitCollisions()
 
 -- ============================================================================
+-- TOWER NAME DISPLAY SYSTEM
+-- ============================================================================
+
+-- Show a tower name in the text box for a specified duration
+function Grid:showTowerName(name, frames, persistent)
+    frames = frames or 30  -- Default 30 frames
+    self.towerNameText = name
+    self.towerNameTimer = frames
+    self.towerNamePersistent = persistent or false
+end
+
+-- Queue a tower name to be shown after current name expires
+function Grid:queueTowerName(name, frames)
+    frames = frames or 30
+    self.pendingTowerNames[#self.pendingTowerNames + 1] = {name = name, frames = frames}
+end
+
+-- Clear tower name display
+function Grid:clearTowerName()
+    self.towerNameText = ""
+    self.towerNameTimer = 0
+    self.towerNamePersistent = false
+    self.pendingTowerNames = {}
+end
+
+-- Update tower name display timer and process queue
+function Grid:updateTowerNameDisplay()
+    if self.towerNameTimer > 0 and not self.towerNamePersistent then
+        self.towerNameTimer = self.towerNameTimer - 1
+        
+        -- If timer expired, show next queued name or clear
+        if self.towerNameTimer <= 0 then
+            if #self.pendingTowerNames > 0 then
+                local next = table.remove(self.pendingTowerNames, 1)
+                self.towerNameText = next.name
+                self.towerNameTimer = next.frames
+                self.towerNamePersistent = false  -- Queued names are not persistent
+            else
+                self.towerNameText = ""
+                self.towerNamePersistent = false
+                
+                -- Check if level advancement was waiting for tower names to finish
+                if self.pendingLevelAdvancement then
+                    self.pendingLevelAdvancement = false
+                    print("DEBUG: Tower names finished, completing level advancement")
+                    self:finishLevelAdvancement()
+                end
+            end
+        end
+    end
+end
+
+-- ============================================================================
 -- RENDERING SYSTEMS
 -- ============================================================================
 
@@ -4715,7 +5094,7 @@ function Grid:draw()
     self:drawGrid()
     self:drawBoundaries()
     self:drawBalls()
-    self:drawRainDots()
+    self:drawRainVisualDots()  -- OPTIMIZED: Visual-only rain effect
     self:drawCreeps()
     self:drawTroops()
     self:drawAvatars()
@@ -4723,7 +5102,11 @@ function Grid:draw()
     self:drawLightningEffects()
     self:drawAnimations()
     self:drawUI()
-    if self.gameState == "gameOver" then
+    if self.gameState == "warden_intro" then
+        self:drawWardenIntroScreen()
+    elseif self.gameState == "restart_confirm" then
+        self:drawRestartConfirmScreen()
+    elseif self.gameState == "gameOver" then
         self:drawGameOverScreen()
     elseif self.gameState == "victory" then
         self:drawVictoryScreen()
@@ -4883,28 +5266,35 @@ function Grid:drawBalls()
     end
 end
 
--- Draw all rain dots (towers will render over them)
-function Grid:drawRainDots()
-    for _, dot in ipairs(self.rainDots) do
-        -- Draw all rain dots as 1px black dots (towers render over them)
+-- OPTIMIZED: Draw visual rain dots (much fewer for performance)
+function Grid:drawRainVisualDots()
+    for _, dot in ipairs(self.rainVisualDots) do
+        -- Draw visual rain dots as 1px black dots
         gfx.setColor(gfx.kColorBlack)
         gfx.fillCircleAtPoint(dot.x, dot.y, 1)
     end
 end
 
 -- Draw all creeps
+-- CONSOLIDATED: Helper function for entity sprite drawing
+function Grid:drawEntitySprite(entity, spriteTable, entityType)
+    local sprite = spriteTable.basic
+    local offset = entity.size / 2
+    
+    if entity.tier == "tier1" then
+        sprite = spriteTable.tier1 or sprite
+    elseif entity.tier == "tier2" then
+        sprite = spriteTable.tier2 or sprite
+    elseif entity.tier == "tier3" then
+        sprite = spriteTable.tier3 or sprite
+    end
+    
+    sprite:draw(entity.x - offset, entity.y - offset)
+end
+
 function Grid:drawCreeps()
     for _, creep in ipairs(self.creeps) do
-        local sprite = self.bubbleSprites.creeps.basic
-        local offset = creep.size / 2
-        
-        if creep.tier == "tier1" then
-            sprite = self.bubbleSprites.creeps.tier1 or sprite
-        elseif creep.tier == "tier2" then
-            sprite = self.bubbleSprites.creeps.tier2 or sprite
-        end
-        
-        sprite:draw(creep.x - offset, creep.y - offset)
+        self:drawEntitySprite(creep, self.bubbleSprites.creeps, "creep")
     end
 end
 -- ============================================================================
@@ -5020,13 +5410,17 @@ function Grid:updateTroops()
             -- Move toward cluster center
             local dx = targetX - troop.x
             local dy = targetY - troop.y
-            local dist = math.sqrt(dx*dx + dy*dy)
+            local distSquared = dx*dx + dy*dy
             
-            if dist <= TROOP_MOVE_SPEED * 4 then  -- Even larger threshold for looser rally clusters
+            -- PERFORMANCE: Use squared distance comparison to avoid sqrt
+            local rallyThreshold = TROOP_MOVE_SPEED * 4
+            if distSquared <= rallyThreshold * rallyThreshold then  -- Even larger threshold for looser rally clusters
                 -- Reached cluster area, join and trigger shuffle
                 troop.rallied = true
                 self:shuffleTroops(troop)
             else
+                -- PERFORMANCE: Only calculate sqrt when movement is needed
+                local dist = math.sqrt(distSquared)
                 -- Move toward cluster center, but clamp to valid area
                 local newX = troop.x + (dx/dist) * TROOP_MOVE_SPEED
                 local newY = troop.y + (dy/dist) * TROOP_MOVE_SPEED
@@ -5134,7 +5528,7 @@ function Grid:updateWardenCombat(warden)
         local dist = math.sqrt(dx*dx + dy*dy)
         
         -- Move toward target (like Tier 2 creep movement)
-        if dist > 15 then -- Maintain 15px minimum distance from target
+        if dist > 30 then -- Maintain 30px minimum distance from target for lightning visibility
             local newX = warden.x + (dx/dist) * warden.movementSpeed
             local newY = warden.y + (dy/dist) * warden.movementSpeed
             local clampedPos = self:clampToValidArea(newX, newY, warden.size)
@@ -5393,123 +5787,139 @@ function Grid:assignMarchIndex(targetTroop)
     return 1  -- Fallback
 end
 
--- Update all Avatar behavior (mobile fire towers)
+-- Update all Avatar behavior (mobile lightning towers - identical to wardens)
 function Grid:updateAvatars()
     for i = #self.avatars, 1, -1 do
         local avatar = self.avatars[i]
         
-        -- Safety check: skip if avatar is nil
-        if not avatar then
+        -- Remove dead avatars
+        if avatar.hitpoints <= 0 then
+            print("DEBUG: Removing dead avatar " .. i)
+            avatar.state = "dead"
             table.remove(self.avatars, i)
             goto continue
         end
         
-        -- State-based behavior similar to wardens
+        -- Update lightning cooldown
+        avatar.lightningCooldown = avatar.lightningCooldown + 1
+        
+        -- State-based behavior
         if avatar.state == "rallying" then
             self:updateAvatarRallying(avatar)
         elseif avatar.state == "combat" then
             self:updateAvatarCombat(avatar)
         end
         
+        -- Fire lightning if cooldown is ready
+        if avatar.lightningCooldown >= 60 then -- 1 second cooldown
+            avatar.lightningCooldown = 0
+            self:processAvatarLightningAttack(avatar)
+        end
+        
         ::continue::
     end
 end
 
--- Update avatar rallying behavior (similar to warden)
+-- Update avatar rallying behavior (identical to warden)
 function Grid:updateAvatarRallying(avatar)
     local dx = avatar.targetX - avatar.x
     local dy = avatar.targetY - avatar.y
     local dist = math.sqrt(dx*dx + dy*dy)
     
     if dist <= 5 then -- Reached rally point
-        if not avatar.rallyComplete then
-            print("DEBUG: Avatar reached rally point, rally complete")
-        end
         avatar.rallyComplete = true
         -- Switch to combat mode when creeps start marching
         if self:isCreepMarchActive() then
-            print("DEBUG: Avatar switching to combat mode - creeps marching")
             avatar.state = "combat"
+            self:assignAvatarCombatTarget(avatar)
         end
     else
-        -- Move toward rally point (same speed as warden)
-        local moveSpeed = TROOP_MARCH_SPEED
-        avatar.x = avatar.x + (dx/dist) * moveSpeed
-        avatar.y = avatar.y + (dy/dist) * moveSpeed
+        -- Move toward rally point
+        local newX = avatar.x + (dx/dist) * avatar.movementSpeed
+        local newY = avatar.y + (dy/dist) * avatar.movementSpeed
+        local clampedPos = self:clampToValidArea(newX, newY, avatar.size)
+        avatar.x = clampedPos.x
+        avatar.y = clampedPos.y
+    end
+    
+    -- Check if we should switch to combat mode even before reaching rally
+    if self:isCreepMarchActive() and not avatar.rallyComplete then
+        avatar.state = "combat" 
+        self:assignAvatarCombatTarget(avatar)
     end
 end
 
--- Update avatar combat behavior
+-- Update avatar combat behavior (identical to warden)
 function Grid:updateAvatarCombat(avatar)
-    -- Only activate during creep march phase
-    if not self:isCreepMarchActive() then
-        return
-    end
+    -- Find and move toward nearest creep
+    self:assignAvatarCombatTarget(avatar)
+    
+    if avatar.currentTarget and avatar.currentTarget.hitpoints > 0 then
+        local dx = avatar.currentTarget.x - avatar.x
+        local dy = avatar.currentTarget.y - avatar.y
+        local dist = math.sqrt(dx*dx + dy*dy)
         
-    -- Find nearest enemy
+        -- Move toward target (like Tier 2 creep movement)
+        if dist > 30 then -- Maintain 30px minimum distance from target for lightning visibility
+            local newX = avatar.x + (dx/dist) * avatar.movementSpeed
+            local newY = avatar.y + (dy/dist) * avatar.movementSpeed
+            local clampedPos = self:clampToValidArea(newX, newY, avatar.size)
+            avatar.x = clampedPos.x
+            avatar.y = clampedPos.y
+        end
+    else
+        -- No target or target dead, find new one
+        self:assignAvatarCombatTarget(avatar)
+    end
+    
+    -- Switch back to rallying if combat ends
+    if not self:isCreepMarchActive() then
+        avatar.state = "rallying"
+        avatar.currentTarget = nil
+        -- Reset target to rally point
+        avatar.targetX = 40 -- Rally point (7,2) 
+        avatar.targetY = 104
+    end
+end
+
+-- Assign nearest creep as Avatar's combat target (identical to warden)
+function Grid:assignAvatarCombatTarget(avatar)
     local nearestCreep = nil
-    local nearestDistance = math.huge
+    local nearestDist = math.huge
     
     for _, creep in ipairs(self.creeps) do
-        local dx = creep.x - avatar.x
-        local dy = creep.y - avatar.y
-        local distance = math.sqrt(dx*dx + dy*dy)
-        
-        if distance < nearestDistance then
-            nearestDistance = distance
-            nearestCreep = creep
+        if creep.hitpoints > 0 and not creep.dead then
+            local dist = math.sqrt((creep.x - avatar.x)^2 + (creep.y - avatar.y)^2)
+            if dist < nearestDist then
+                nearestDist = dist
+                nearestCreep = creep
+            end
         end
     end
     
-    -- Move towards nearest enemy or attack if in range
-    if nearestCreep then
-        local dx = nearestCreep.x - avatar.x
-        local dy = nearestCreep.y - avatar.y
-        local distance = math.sqrt(dx*dx + dy*dy)
-        
-        -- Fire tower range is FLAME_TOWER_RANGE (240px)
-        if distance <= FLAME_TOWER_RANGE then
-            -- Fire projectiles like a flame tower
-            if self.frameCounter - avatar.lastShotTime >= FLAME_TOWER_COOLDOWN then
-                self:fireAvatarProjectiles(avatar, nearestCreep.x, nearestCreep.y)
-                avatar.lastShotTime = self.frameCounter
-            end
-        else
-            -- Move towards enemy (same speed as troop march)
-            local moveDistance = TROOP_MARCH_SPEED
-            local moveX = (dx / distance) * moveDistance
-            local moveY = (dy / distance) * moveDistance
-            avatar.x = avatar.x + moveX
-            avatar.y = avatar.y + moveY
-        end
-    end
+    avatar.currentTarget = nearestCreep
 end
 
-
--- Fire Avatar projectiles (flame tower style)
-function Grid:fireAvatarProjectiles(avatar, targetX, targetY)
-    local dx = targetX - avatar.x
-    local dy = targetY - avatar.y
-    local baseAngle = math.atan2(dy, dx)
+-- Process mobile lightning attack for an avatar unit (identical to warden)
+function Grid:processAvatarLightningAttack(avatar)
+    -- Find nearest creep within extended lightning range (mobile avatars have longer range)
+    local target = self:findPriorityTargetForLightning(avatar.x, avatar.y, LIGHTNING_BOLT_RANGE * 1.5)
     
-    -- Fire projectiles in a cone like flame tower
-    for i = 1, FLAME_PROJECTILES_PER_SHOT do
-        local spreadAngle = (i - 2) * (FLAME_CONE_ANGLE * PI_OVER_180)  -- -15°, 0°, +15°
-        local angle = baseAngle + spreadAngle
+    if target then
+        -- Generate jagged lightning path from avatar to target
+        local lightningPath = self:generateLightningPath(avatar.x, avatar.y, target.x, target.y)
         
-        self.projectiles[#self.projectiles + 1] = {
-            x = avatar.x,
-            y = avatar.y,
-            vx = math.cos(angle) * FLAME_PROJECTILE_SPEED,
-            vy = math.sin(angle) * FLAME_PROJECTILE_SPEED,
-            damage = FLAME_PROJECTILE_DAMAGE,
-            maxRange = FLAME_PROJECTILE_RANGE,
-            startX = avatar.x,
-            startY = avatar.y,
-            towerType = "avatar"
+        -- Create instant lightning effect
+        self.lightningEffects[#self.lightningEffects + 1] = {
+            path = lightningPath,
+            lifetime = LIGHTNING_BOLT_LIFETIME,
+            damage = LIGHTNING_BOLT_DAMAGE * 0.8, -- Avatars do 80% of tower lightning damage
+            targetCreep = target,
+            isAvatarLightning = true -- Mark as avatar lightning for visual distinction
         }
     end
 end
+
 
 -- Math helper: sign function
 function math.sign(x)
@@ -6004,7 +6414,7 @@ function Grid:processTowerAttack(tower)
     if tower.ballType == 1 then  -- Flame tower
         self:flameCreateProjectiles(tower)
     elseif tower.ballType == 2 then  -- Rain tower (Water)
-        self:rainCreateDots(tower)
+        self:rainAreaAttack(tower)  -- OPTIMIZED: Direct area damage
     elseif tower.ballType == 3 then  -- Tremor tower (Earth)
         self:tremorCreateProjectiles(tower)
     elseif tower.ballType == 4 then  -- Lightning tower
@@ -6064,30 +6474,51 @@ function Grid:flameCreateProjectiles(tower)
     end
 end
 
--- Create rain tower damage dots in random positions around tower
-function Grid:rainCreateDots(tower)
+-- OPTIMIZED: Rain tower area damage - direct damage to creeps in range
+function Grid:rainAreaAttack(tower)
     -- Only rain towers use this system
     if tower.ballType ~= 2 then return end
     
-    -- Rain towers always spawn dots - no range or target checking needed
-    for i = 1, RAIN_DOTS_PER_FRAME do
-        -- Generate random position within the ring (between inner and outer radius)
+    -- Direct area damage - check all creeps in range
+    for _, creep in ipairs(self.creeps) do
+        local dx = tower.centerX - creep.x
+        local dy = tower.centerY - creep.y
+        local distSquared = dx*dx + dy*dy
+        local outerRadiusSquared = RAIN_OUTER_RADIUS * RAIN_OUTER_RADIUS
+        local innerRadiusSquared = RAIN_INNER_RADIUS * RAIN_INNER_RADIUS
+        
+        -- Check if creep is in the damage ring (between inner and outer radius)
+        if distSquared <= outerRadiusSquared and distSquared >= innerRadiusSquared then
+            creep.hitpoints = creep.hitpoints - RAIN_DAMAGE_PER_FRAME
+            
+            -- Mark creep for death if health depleted (avoid table.remove in loop)
+            if creep.hitpoints <= 0 then
+                creep.isDead = true
+                self:checkStagingAvailability(creep.stagingIdx)
+            end
+        end
+    end
+    
+    -- Add visual dots for effect (respect device performance limits)
+    if #self.rainVisualDots < math.min(RAIN_VISUAL_DOTS, MAX_ACTIVE_RAIN_DOTS) then
         local angle = math.random() * 2 * math.pi
-        -- For ring distribution: distance between inner and outer radius
         local ringWidth = RAIN_OUTER_RADIUS - RAIN_INNER_RADIUS
         local distance = RAIN_INNER_RADIUS + math.sqrt(math.random()) * ringWidth
         
-        local dotX = tower.centerX + math.cos(angle) * distance
-        local dotY = tower.centerY + math.sin(angle) * distance
-        
-        -- Create rain dot
-        self.rainDots[#self.rainDots + 1] = {
-            x = dotX,
-            y = dotY,
-            damage = RAIN_DOT_DAMAGE,
-            lifetime = RAIN_DOT_LIFETIME,
+        self.rainVisualDots[#self.rainVisualDots + 1] = {
+            x = tower.centerX + math.cos(angle) * distance,
+            y = tower.centerY + math.sin(angle) * distance,
             spawnFrame = self.frameCounter
         }
+    end
+    
+    -- Clean up any creeps killed by rain damage (immediate cleanup for gameplay integrity)
+    for i = #self.creeps, 1, -1 do
+        local creep = self.creeps[i]
+        if creep.isDead then
+            table.remove(self.creeps, i)
+            self:checkForVictory()
+        end
     end
 end
 
@@ -6473,12 +6904,13 @@ function Grid:updateBasicCreepAttacks(creep)
         -- Use the locked stand-and-fight target instead of finding a new one
         local target = creep.standAndFightTarget
         if target and target.hitpoints > 0 then
-            -- Check if target is in attack range
+            -- PERFORMANCE: Check if target is in attack range using squared distance
             local dx = target.centerX - creep.x
             local dy = target.centerY - creep.y
-            local dist = math.sqrt(dx*dx + dy*dy)
+            local distSquared = dx*dx + dy*dy
+            local attackRangeSquared = CREEP_ATTACK_RANGE * CREEP_ATTACK_RANGE
             
-            if dist <= CREEP_ATTACK_RANGE then
+            if distSquared <= attackRangeSquared then
                 -- Attack the locked tower
                 target.hitpoints = target.hitpoints - CREEP_BASIC_DAMAGE
                 creep.lastAttackTime = 0  -- Reset cooldown
@@ -6664,6 +7096,9 @@ function Grid:destroyTower(tower)
             
             -- Remove from tierOnePositions
             self.tierOnePositions[idx] = nil
+            
+            -- PERFORMANCE: Mark zone target cache for delayed update when tower is destroyed
+            self.zoneCacheNeedsUpdate = true
             break
         end
     end
@@ -6683,6 +7118,9 @@ function Grid:destroyTowerTier2(tower, towerIdx)
     
     -- Remove from tierTwoPositions
     self.tierTwoPositions[towerIdx] = nil
+    
+    -- PERFORMANCE: Mark zone target cache for delayed update when tower is destroyed
+    self.zoneCacheNeedsUpdate = true
     
     -- Check for game over (no more towers)
     self:checkForDefeat()
@@ -6775,10 +7213,8 @@ function Grid:updateProjectiles()
         -- Early exit: check screen boundaries first (fastest check)
         if projectile.x < 0 or projectile.x > SCREEN_WIDTH or 
            projectile.y < 0 or projectile.y > SCREEN_HEIGHT then
-            -- Bounds check before removal
-            if i <= #self.projectiles then
-                table.remove(self.projectiles, i)
-            end
+            -- OPTIMIZED: Mark for deletion instead of table.remove
+            projectile.isDead = true
             goto continue
         end
         
@@ -6799,12 +7235,10 @@ function Grid:updateProjectiles()
         -- Use variable range if available, otherwise fall back to default
         local maxRange = projectile.maxRange or FLAME_PROJECTILE_RANGE
         
-        -- Remove if traveled max range
+        -- Mark for removal if traveled max range
         if distTraveled >= maxRange then
-            -- Bounds check before removal
-            if i <= #self.projectiles then
-                table.remove(self.projectiles, i)
-            end
+            -- OPTIMIZED: Mark for deletion instead of table.remove
+            projectile.isDead = true
         else
             -- Check collision based on projectile type
             if projectile.creepType then
@@ -6818,71 +7252,82 @@ function Grid:updateProjectiles()
         
         ::continue::
     end
+    
+    -- OPTIMIZED: Clean up dead projectiles after all processing
+    self:cleanupDeadProjectiles()
 end
 
--- Update rain dots: handle lifetime, collision detection, and cleanup
-function Grid:updateRainDots()
-    for i = #self.rainDots, 1, -1 do
-        local dot = self.rainDots[i]
-        
-        -- Safety check: skip if dot is nil or if array was cleared during level transition
-        if not dot or i > #self.rainDots then
-            -- Only remove if index is still valid
-            if i <= #self.rainDots then
-                table.remove(self.rainDots, i)
-            end
-            goto continue
+-- OPTIMIZED: Clean up dead projectiles efficiently
+function Grid:cleanupDeadProjectiles()
+    local livingProjectiles = {}
+    
+    for _, projectile in ipairs(self.projectiles) do
+        if not projectile.isDead then
+            livingProjectiles[#livingProjectiles + 1] = projectile
         end
-        
-        -- Check if dot has expired (5 frames)
-        if (self.frameCounter - dot.spawnFrame) >= RAIN_DOT_LIFETIME then
-            -- Bounds check before removal
-            if i <= #self.rainDots then
-                table.remove(self.rainDots, i)
-            end
-            goto continue
-        end
-        
-        -- Check collision with all creeps (optimized: avoid sqrt, use squared distance)
-        for j = #self.creeps, 1, -1 do
-            local creep = self.creeps[j]
-            
-            -- Calculate squared distance between dot and creep (faster than sqrt)
-            local dx = dot.x - creep.x
-            local dy = dot.y - creep.y
-            local distSquared = dx*dx + dy*dy
-            local creepSizeSquared = creep.size * creep.size
-            
-            -- Enhanced collision: 3x larger hit radius (9x area) for improved effectiveness
-            if distSquared <= (creepSizeSquared * 9) then
-                -- Deal damage to creep
-                creep.hitpoints = creep.hitpoints - dot.damage
-                
-                -- Remove the dot (it gets consumed on hit)
-                -- Bounds check before removal
-                if i <= #self.rainDots then
-                    table.remove(self.rainDots, i)
-                end
-                
-                -- Check if creep is dead
-                if creep.hitpoints <= 0 then
-                    -- Free up staging position if this was the last creep there
-                    self:checkStagingAvailability(creep.stagingIdx)
-                    -- Bounds check before removal
-                    if j <= #self.creeps then
-                        table.remove(self.creeps, j)
-                        
-                        -- Check for victory after removing creep
-                        self:checkForVictory()
-                    end
-                end
-                
-                goto continue  -- Dot is consumed, move to next dot
-            end
-        end
-        
-        ::continue::
     end
+    
+    self.projectiles = livingProjectiles  -- Replace with cleaned array
+end
+
+-- DEVICE PERFORMANCE: Monitor and enforce entity limits
+function Grid:enforcePerformanceLimits()
+    -- Only check every N frames to reduce overhead
+    if self.frameCounter % PERFORMANCE_CHECK_INTERVAL ~= 0 then
+        return
+    end
+    
+    -- REMOVED: Creep limiting - creeps are gameplay critical and must not be artificially removed
+    
+    -- Limit active projectiles with smart prioritization
+    if #self.projectiles > MAX_ACTIVE_PROJECTILES then
+        local excess = #self.projectiles - MAX_ACTIVE_PROJECTILES
+        local removedCount = 0
+        
+        -- Priority removal: remove non-flame projectiles first, then oldest flame projectiles
+        for i = 1, #self.projectiles do
+            if removedCount >= excess then break end
+            local projectile = self.projectiles[i]
+            if projectile and not projectile.isDead and projectile.towerType ~= 1 then
+                projectile.isDead = true  -- Remove non-flame projectiles first
+                removedCount = removedCount + 1
+            end
+        end
+        
+        -- If still over limit, remove oldest flame projectiles
+        if removedCount < excess then
+            for i = 1, #self.projectiles do
+                if removedCount >= excess then break end
+                local projectile = self.projectiles[i]
+                if projectile and not projectile.isDead then
+                    projectile.isDead = true  -- Remove oldest remaining projectiles
+                    removedCount = removedCount + 1
+                end
+            end
+        end
+    end
+    
+    -- Limit lightning effects
+    while #self.lightningEffects > MAX_ACTIVE_LIGHTNING_EFFECTS do
+        table.remove(self.lightningEffects, 1)  -- Remove oldest lightning effect
+    end
+    
+    -- Cap visual rain dots (already handled in creation, but cleanup excess)
+    while #self.rainVisualDots > MAX_ACTIVE_RAIN_DOTS do
+        table.remove(self.rainVisualDots, 1)  -- Remove oldest visual dot
+    end
+end
+
+-- OPTIMIZED: Update visual rain dots - no collision detection, just display lifetime
+function Grid:updateRainVisualDots()
+    -- Remove expired visual dots (mark for deletion to avoid table.remove in loop)
+    local validDots = {}
+    for _, dot in ipairs(self.rainVisualDots) do
+        if (self.frameCounter - dot.spawnFrame) < RAIN_DOT_DISPLAY_FRAMES then
+            validDots[#validDots + 1] = dot
+        end
+    end
+    self.rainVisualDots = validDots  -- Replace with cleaned array (much faster)
 end
 
 -- Update lightning effects: handle lifetime and cleanup
@@ -6921,10 +7366,10 @@ function Grid:checkProjectileCreepCollision(projectile, projectileIndex)
         if creep.marching then  -- Only hit marching creeps
             local dx = projectile.x - creep.x
             local dy = projectile.y - creep.y
-            local dist = math.sqrt(dx*dx + dy*dy)
+            local distSquared = dx*dx + dy*dy
             
-            -- Hit if projectile is within creep's collision radius
-            if dist <= creep.size then
+            -- OPTIMIZED: Use squared distance (avoid expensive sqrt)
+            if distSquared <= (creep.size * creep.size) then
                 -- Deal damage to creep
                 creep.hitpoints = creep.hitpoints - projectile.damage
                 
@@ -6998,12 +7443,10 @@ function Grid:checkProjectileCreepCollision(projectile, projectileIndex)
                     end
                 end
                 
-                -- Remove projectile if it's not piercing
+                -- Mark projectile for deletion if it's not piercing
                 if not isPiercing then
-                    -- Bounds check before removal
-                    if projectileIndex <= #self.projectiles then
-                        table.remove(self.projectiles, projectileIndex)
-                    end
+                    -- OPTIMIZED: Mark for deletion instead of table.remove
+                    projectile.isDead = true
                 end
                 
                 -- Check if creep is dead
@@ -7034,24 +7477,22 @@ function Grid:checkCreepProjectileTowerCollision(projectile, projectileIndex)
     -- Check all tier 1 towers for collision
     for idx, tower in pairs(self.tierOnePositions) do
         if tower.hitpoints > 0 then  -- Only check living towers
-            -- Calculate distance between projectile and tower center
+            -- OPTIMIZED: Calculate squared distance (avoid expensive sqrt)
             local dx = projectile.x - tower.centerX
             local dy = projectile.y - tower.centerY
-            local distance = math.sqrt(dx*dx + dy*dy)
+            local distanceSquared = dx*dx + dy*dy
             
             -- Tower collision radius (use sprite radius)
-            local towerRadius = TOWER_SPRITE_RADIUS
+            local towerRadiusSquared = TOWER_SPRITE_RADIUS * TOWER_SPRITE_RADIUS
             
             -- Check if projectile hits the tower
-            if distance <= towerRadius then
+            if distanceSquared <= towerRadiusSquared then
                 -- Apply damage to tower
                 tower.hitpoints = tower.hitpoints - projectile.damage
                 
-                -- Remove the projectile
-                -- Bounds check before removal
-                if projectileIndex <= #self.projectiles then
-                    table.remove(self.projectiles, projectileIndex)
-                end
+                -- Mark projectile for deletion
+                -- OPTIMIZED: Mark for deletion instead of table.remove
+                projectile.isDead = true
                 
                 
                 -- Check if tower is destroyed
@@ -7067,24 +7508,23 @@ function Grid:checkCreepProjectileTowerCollision(projectile, projectileIndex)
     -- Check all tier 2 towers for collision
     for idx, tower in pairs(self.tierTwoPositions) do
         if tower.hitpoints > 0 then  -- Only check living towers
-            -- Calculate distance between projectile and tower center
+            -- OPTIMIZED: Calculate squared distance (avoid expensive sqrt)
             local dx = projectile.x - tower.centerX
             local dy = projectile.y - tower.centerY
-            local distance = math.sqrt(dx*dx + dy*dy)
+            local distanceSquared = dx*dx + dy*dy
             
             -- Tower collision radius (larger for tier 2)
             local towerRadius = TOWER_SPRITE_RADIUS + 8
+            local towerRadiusSquared = towerRadius * towerRadius
             
             -- Check if projectile hits the tower
-            if distance <= towerRadius then
+            if distanceSquared <= towerRadiusSquared then
                 -- Apply damage to tower
                 tower.hitpoints = tower.hitpoints - projectile.damage
                 
-                -- Remove the projectile
-                -- Bounds check before removal
-                if projectileIndex <= #self.projectiles then
-                    table.remove(self.projectiles, projectileIndex)
-                end
+                -- Mark projectile for deletion
+                -- OPTIMIZED: Mark for deletion instead of table.remove
+                projectile.isDead = true
                 
                 
                 -- Check if tower is destroyed
@@ -7099,53 +7539,55 @@ function Grid:checkCreepProjectileTowerCollision(projectile, projectileIndex)
     
     -- Check all Avatars for collision
     for avatarIndex, avatar in ipairs(self.avatars) do
-        -- Calculate distance between projectile and avatar center
-        local dx = projectile.x - avatar.x
-        local dy = projectile.y - avatar.y
-        local distance = math.sqrt(dx*dx + dy*dy)
-        
-        -- Avatar collision radius (same as Tier 3 tower - 42px radius)
-        local avatarRadius = 42
-        
-        -- Check if projectile hits the avatar
-        if distance <= avatarRadius then
-            -- Apply damage to avatar
-            avatar.hitpoints = avatar.hitpoints - projectile.damage
+        if avatar.hitpoints > 0 then  -- Only check living avatars
+            -- OPTIMIZED: Calculate squared distance (avoid expensive sqrt)
+            local dx = projectile.x - avatar.x
+            local dy = projectile.y - avatar.y
+            local distanceSquared = dx*dx + dy*dy
             
-            -- Remove the projectile
-            if projectileIndex <= #self.projectiles then
-                table.remove(self.projectiles, projectileIndex)
+            -- Use avatar size for collision radius (identical to warden)
+            local avatarRadius = avatar.size / 2
+            local avatarRadiusSquared = avatarRadius * avatarRadius
+            
+            -- Check if projectile hits the avatar
+            if distanceSquared <= avatarRadiusSquared then
+                -- Apply damage to avatar
+                avatar.hitpoints = avatar.hitpoints - projectile.damage
+                
+                -- Mark projectile for deletion
+                -- OPTIMIZED: Mark for deletion instead of table.remove
+                projectile.isDead = true
+                
+                -- Mark destroyed avatar for deletion
+                if avatar.hitpoints <= 0 then
+                    avatar.isDead = true  -- OPTIMIZED: Mark for deletion
+                end
+                
+                return  -- Projectile hit something, stop processing
             end
-            
-            -- Check if avatar is destroyed
-            if avatar.hitpoints <= 0 then
-                table.remove(self.avatars, avatarIndex)
-            end
-            
-            return  -- Projectile hit something, stop processing
         end
     end
     
     -- Check mobile Warden units for collision  
     for wardenIndex, warden in ipairs(self.wardens) do
         if warden.hitpoints > 0 then  -- Only check living wardens
-            -- Calculate distance between projectile and warden center
+            -- OPTIMIZED: Calculate squared distance (avoid expensive sqrt)
             local dx = projectile.x - warden.x
             local dy = projectile.y - warden.y
-            local distance = math.sqrt(dx*dx + dy*dy)
+            local distanceSquared = dx*dx + dy*dy
             
             -- Use warden size for collision radius
             local wardenRadius = warden.size / 2
+            local wardenRadiusSquared = wardenRadius * wardenRadius
             
             -- Check if projectile hits the warden
-            if distance <= wardenRadius then
+            if distanceSquared <= wardenRadiusSquared then
                 -- Apply damage to warden
                 warden.hitpoints = warden.hitpoints - projectile.damage
                 
-                -- Remove the projectile
-                if projectileIndex <= #self.projectiles then
-                    table.remove(self.projectiles, projectileIndex)
-                end
+                -- Mark projectile for deletion
+                -- OPTIMIZED: Mark for deletion instead of table.remove
+                projectile.isDead = true
                 
                 -- Warden death is handled in updateWardens()
                 
@@ -7212,25 +7654,15 @@ end
 -- Draw all troops
 function Grid:drawTroops()
     for _, troop in ipairs(self.troops) do
-        local sprite = self.bubbleSprites.troops.basic
-        local offset = troop.size / 2
-        
-        if troop.tier == "tier1" then
-            sprite = self.bubbleSprites.troops.tier1 or sprite
-        elseif troop.tier == "tier2" then
-            sprite = self.bubbleSprites.troops.tier2 or sprite
-        elseif troop.tier == "tier3" then
-            sprite = self.bubbleSprites.troops.tier3 or sprite
-        end
-        
-        sprite:draw(troop.x - offset, troop.y - offset)
+        self:drawEntitySprite(troop, self.bubbleSprites.troops, "troop")
     end
     
     -- Draw mobile Warden units
     for _, warden in ipairs(self.wardens) do
         if warden.hitpoints > 0 then
-            local offset = warden.size / 2
-            self.bubbleSprites.troops.tier2:draw(warden.x - offset, warden.y - offset)
+            -- CONSOLIDATED: Use helper function for consistent sprite drawing
+            warden.tier = "tier2"  -- Wardens use tier2 sprite
+            self:drawEntitySprite(warden, self.bubbleSprites.troops, "warden")
             
             -- Draw health bar if damaged and in combat
             if warden.hitpoints < warden.maxHitpoints and self:isCreepMarchActive() then
@@ -7257,35 +7689,36 @@ function Grid:drawWardenHPBar(warden)
     gfx.fillRect(barX + 1, barY + 1, (barWidth - 2) * healthPercent, barHeight - 2)
 end
 
--- Draw all Avatars
+-- Draw all Avatars (identical to warden drawing)
 function Grid:drawAvatars()
     for _, avatar in ipairs(self.avatars) do
-        -- Draw Avatar using troops tier 3 sprite (from troops-tier-three.png)
-        self.bubbleSprites.troops.tier3:draw(avatar.x - 42, avatar.y - 42)
-        
-        -- Draw health bar if in combat
-        if self:isCreepMarchActive() and avatar.hitpoints < AVATAR_HP then
-            self:drawAvatarHPBar(avatar)
+        if avatar.hitpoints > 0 then
+            -- Use helper function for consistent sprite drawing (same as wardens)
+            avatar.tier = "tier2"  -- Avatars use tier2 sprite
+            self:drawEntitySprite(avatar, self.bubbleSprites.troops, "avatar")
+            
+            -- Draw health bar if damaged and in combat
+            if avatar.hitpoints < avatar.maxHitpoints and self:isCreepMarchActive() then
+                self:drawAvatarHPBar(avatar)
+            end
         end
     end
 end
 
--- Draw health bar for Avatar
+-- Draw health bar for Avatar (identical to warden)
 function Grid:drawAvatarHPBar(avatar)
-    local barWidth = 60
-    local barHeight = 6
+    local barWidth = 20
+    local barHeight = 3
     local barX = avatar.x - barWidth / 2
-    local barY = avatar.y - 50  -- Above the avatar
+    local barY = avatar.y - avatar.size / 2 - 8
     
     -- Background
-    gfx.setColor(gfx.kColorWhite)
-    gfx.fillRect(barX, barY, barWidth, barHeight)
     gfx.setColor(gfx.kColorBlack)
-    gfx.drawRect(barX, barY, barWidth, barHeight)
+    gfx.fillRect(barX, barY, barWidth, barHeight)
     
     -- Health bar
-    local healthPercent = avatar.hitpoints / AVATAR_HP
-    gfx.setColor(gfx.kColorBlack)
+    local healthPercent = avatar.hitpoints / avatar.maxHitpoints
+    gfx.setColor(gfx.kColorWhite)
     gfx.fillRect(barX + 1, barY + 1, (barWidth - 2) * healthPercent, barHeight - 2)
 end
 
@@ -7475,6 +7908,12 @@ function Grid:drawUI()
         end
     end
     
+    -- Tower name text box at bottom of screen
+    if self.towerNameText ~= "" then
+        gfx.setColor(gfx.kColorBlack)
+        gfx.drawText(self.towerNameText, 10, 220)  -- Bottom of screen (240px screen height)
+    end
+    
 end
 
 -- Draw game over screen
@@ -7543,11 +7982,55 @@ function Grid:drawTier3UnlockScreen()
     
     gfx.drawTextInRect("LEVEL 2 COMPLETE!", boxX, boxY + 5, boxWidth, 20, 
                        nil, nil, kTextAlignment.center)
-    gfx.drawTextInRect("AVATAR TOWERS", boxX, boxY + 25, boxWidth, 20, 
+    gfx.drawTextInRect("WARDEN TOWERS", boxX, boxY + 25, boxWidth, 20, 
                        nil, nil, kTextAlignment.center)
     gfx.drawTextInRect("UNLOCKED!", boxX, boxY + 45, boxWidth, 20, 
                        nil, nil, kTextAlignment.center)
     gfx.drawTextInRect("Press A to continue", boxX, boxY + 70, boxWidth, 20, 
+                       nil, nil, kTextAlignment.center)
+end
+
+-- Draw Warden intro screen
+function Grid:drawWardenIntroScreen()
+    local boxWidth, boxHeight = 280, 160
+    local boxX, boxY = 200 - boxWidth / 2, 120 - boxHeight / 2
+    
+    gfx.setColor(gfx.kColorWhite)
+    gfx.fillRect(boxX, boxY, boxWidth, boxHeight)
+    gfx.setColor(gfx.kColorBlack)
+    gfx.drawRect(boxX, boxY, boxWidth, boxHeight)
+    
+    gfx.drawTextInRect("AWAKEN THE 5 WARDENS", boxX, boxY + 5, boxWidth, 20, 
+                       nil, nil, kTextAlignment.center)
+    
+    gfx.drawTextInRect("Tempest - Ember - Chronus", boxX, boxY + 30, boxWidth, 20, 
+                       nil, nil, kTextAlignment.center)
+    gfx.drawTextInRect("Prism - Catalyst", boxX, boxY + 55, boxWidth, 20, 
+                       nil, nil, kTextAlignment.center)
+    
+    gfx.drawTextInRect("SAVE MERGETHORNE", boxX, boxY + 80, boxWidth, 20, 
+                       nil, nil, kTextAlignment.center)
+    
+    gfx.drawTextInRect("Press A to begin", boxX, boxY + 120, boxWidth, 20, 
+                       nil, nil, kTextAlignment.center)
+end
+
+-- Draw restart confirmation screen
+function Grid:drawRestartConfirmScreen()
+    local boxWidth, boxHeight = 280, 100
+    local boxX, boxY = 200 - boxWidth / 2, 120 - boxHeight / 2
+    
+    gfx.setColor(gfx.kColorWhite)
+    gfx.fillRect(boxX, boxY, boxWidth, boxHeight)
+    gfx.setColor(gfx.kColorBlack)
+    gfx.drawRect(boxX, boxY, boxWidth, boxHeight)
+    
+    gfx.drawTextInRect("RESTART GAME?", boxX, boxY + 15, boxWidth, 20, 
+                       nil, nil, kTextAlignment.center)
+    
+    gfx.drawTextInRect("Press B again to restart", boxX, boxY + 40, boxWidth, 20, 
+                       nil, nil, kTextAlignment.center)
+    gfx.drawTextInRect("Press A to continue", boxX, boxY + 60, boxWidth, 20, 
                        nil, nil, kTextAlignment.center)
 end
 

@@ -11,17 +11,24 @@ x Wind push locks T1 out of range but doesn't outrange T2
 x Quake tower aims faster
 x Add escalating enemies
 x Art for Tier 2 towers
+x Performance on playdate, esp Basic Creep
+x Spawn fewer basic creeps and they do dbl dmg
+x Wardens as Avatars for prototype
+x Add the goal of making the avatar (5 giants)
+x Remove dpad left debug and add confirm b on restart
+x Add announce box hint/text system
 
-o Performance on playdate
-o Wardens and avatars not working
+o Tier 2 tower names not showing
 o Add base health and losing health
+o Escalating creep damage
 o Add game over from no health
-o Add announce box hint/text system
-o Add the goal of making the avatar (5 giants)
-o Remove dpad left debug and b restart
-o Web build and documentation
+o Web build with up/down aim, up/down move, shoot and restart. And documentation
 
+o Win counter for making 5 warden/avatars
+o When towers merge in the compact phase, the to be deleted towers stay on screen a bit after the new ones appear creating temporary confusion (although it is all resolving correctly)
 o Update creep balance
+o Add Tier 2 tower unique abilities
+o Add Avatar and Waden attack unique abilities
 o Add bubble off the edge turns all remaining bubbles into Tier 2 and triggers end (they fly from preview area)
 o Art for Avatars (element in chest?)
 o Main menu, merges, hints to making final avatar

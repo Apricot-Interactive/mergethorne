@@ -137,12 +137,12 @@ MergeConstants.CREEP_SPAWN_BUCKETS = {
     {range = {1, 10}, count = 1, tier = "basic", size = 3},
     {range = {11, 20}, count = 2, tier = "basic", size = 3},
     {range = {21, 30}, count = 1, tier = "tier1", size = 4},
-    {range = {31, 40}, count = 4, tier = "basic", size = 3},
+    {range = {31, 40}, count = 2, tier = "basic", size = 3},  -- REDUCED: 4 → 2
     {range = {41, 50}, count = 2, tier = "tier1", size = 4},
     {range = {51, 60}, count = 1, tier = "tier2", size = 8},
-    {range = {61, 70}, count = 6, tier = "basic", size = 3},
+    {range = {61, 70}, count = 3, tier = "basic", size = 3},  -- REDUCED: 6 → 3
     {range = {71, 80}, count = 3, tier = "tier1", size = 4},
-    {range = {81, 90}, count = 12, tier = "basic", size = 3},
+    {range = {81, 90}, count = 6, tier = "basic", size = 3},  -- REDUCED: 12 → 6
     {range = {91, 100}, count = 3, tier = "tier2", size = 8}
 }
 

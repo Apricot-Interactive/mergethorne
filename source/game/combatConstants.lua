@@ -30,7 +30,7 @@ local CombatConstants = {}
 CombatConstants.UNIT_STATS = {
     basic = {
         HITPOINTS = 6,      -- Fragile but fast - high risk/reward
-        DAMAGE = 2,         -- Meaningful damage for successful charges
+        DAMAGE = 4,         -- DOUBLED: Meaningful damage for successful charges
         ATTACK_TYPE = "suicide_crash",
         ATTACK_RANGE = 25,  -- Better engagement window vs ranged
         BLAST_RADIUS = 15,  -- Precise blast for tactical positioning
@@ -40,7 +40,7 @@ CombatConstants.UNIT_STATS = {
     
     tier1 = {
         HITPOINTS = 15,     -- Tougher than basic but not overpowered
-        DAMAGE = 4,         -- Meaningful blast damage for tactical play
+        DAMAGE = 8,         -- DOUBLED: Meaningful blast damage for tactical play
         ATTACK_TYPE = "suicide_crash",
         ATTACK_RANGE = 30,  -- Better reach against ranged enemies
         BLAST_RADIUS = 18,  -- Wider blast for area control
@@ -50,7 +50,7 @@ CombatConstants.UNIT_STATS = {
     
     tier2 = {
         HITPOINTS = 35,     -- Durable but killable by focused assault
-        DAMAGE = 6,         -- Effective damage for destroying bubble towers
+        DAMAGE = 12,        -- DOUBLED: Effective damage for destroying bubble towers
         ATTACK_TYPE = "projectile",
         ATTACK_RANGE = 120, -- Closer combat, positioning matters more
         BLAST_RADIUS = 0,   -- No area damage
