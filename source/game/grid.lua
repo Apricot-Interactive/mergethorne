@@ -96,7 +96,7 @@ local BASIC_BOUNDARY_BUFFER <const> = 5        -- Safety buffer from left screen
 local TIER1_MERGE_DISTANCE <const> = 36        -- Touching distance for Tier 1 towers (18+18 radii)
 local TIER2_MERGE_DISTANCE <const> = 52        -- Touching distance for Tier 2 towers (26+26 radii)
 local MAGNETIC_TIER1_DISTANCE <const> = 45     -- Tier 1 to Tier 2 magnetic combination range
-local MAGNETIC_TIER2_DISTANCE <const> = 50     -- Tier 2 to Tier 2 magnetic combination range
+local MAGNETIC_TIER2_DISTANCE <const> = 60     -- Tier 2 to Tier 2 magnetic combination range (52px diameter + 8px buffer)
 
 -- ============================================================================
 -- ENEMY CREEP SYSTEM CONSTANTS
@@ -261,10 +261,10 @@ local FLAME_TOWER_RANGE <const> = 240          -- Detection/targeting range
 local FLAME_PROJECTILE_SPEED <const> = 1.25    -- Projectile velocity (pixels/frame)
 local FLAME_PROJECTILE_RANGE <const> = 60      -- Distance projectiles travel before despawning
 local FLAME_CONE_ANGLE <const> = 15            -- ±15 degrees cone spread from aim direction
-local FLAME_PROJECTILE_DAMAGE <const> = 1      -- Damage per projectile (low but rapid)
+local FLAME_PROJECTILE_DAMAGE <const> = 3      -- Enhanced damage per projectile (4.5 DPS target)
 local FLAME_PROJECTILES_PER_SHOT <const> = 3   -- Number of projectiles per attack
 local FLAME_TOWER_COOLDOWN <const> = 2         -- Frames between attacks (very rapid)
-local FLAME_ROTATION_SPEED <const> = math.pi / 12  -- 90° per 6 frames rotation speed
+local FLAME_ROTATION_SPEED <const> = math.pi / 15  -- 12° per frame = 360°/sec at 30fps
 
 -- Tremor Tower (ballType 3) - Precise arc shockwaves  
 local TREMOR_TOWER_RANGE <const> = 240         -- Detection/targeting range (same as flame)
@@ -273,13 +273,13 @@ local TREMOR_PROJECTILE_RANGE <const> = 60     -- Distance projectiles travel (s
 local TREMOR_ARC_ANGLE <const> = 45            -- Total arc span in degrees (45° spread)
 local TREMOR_PROJECTILES_PER_SHOT <const> = 15 -- 15 projectiles in precise formation
 local TREMOR_TOWER_COOLDOWN <const> = 25       -- Frames between attacks (slower than flame)
-local TREMOR_ROTATION_SPEED <const> = math.pi / 12  -- Same rotation speed as flame
-local TREMOR_PROJECTILE_DAMAGE <const> = 3     -- Higher damage per projectile (pierces targets)
+local TREMOR_ROTATION_SPEED <const> = math.pi / 15  -- 12° per frame = 360°/sec at 30fps
+local TREMOR_PROJECTILE_DAMAGE <const> = 5     -- Enhanced damage per projectile (3.0 DPS target)
 
 -- Rain Tower (ballType 2) - Stationary damage dots
 local RAIN_DOTS_PER_FRAME <const> = 2          -- Number of dots spawned each frame (reduced for performance)
 local RAIN_DOT_LIFETIME <const> = 6            -- Frames each dot lasts (reduced for performance)
-local RAIN_DOT_DAMAGE <const> = 2              -- Damage per dot collision
+local RAIN_DOT_DAMAGE <const> = 3              -- Enhanced damage per dot (3.0 DPS target)
 local RAIN_INNER_RADIUS <const> = 10           -- Inner radius (tower radius)
 local RAIN_OUTER_RADIUS <const> = 50           -- Outer radius (tower radius + 40px) - increased by 10px
 
@@ -290,12 +290,12 @@ local WIND_PROJECTILE_RANGE <const> = 60       -- Distance projectiles travel (s
 local WIND_PROJECTILES_PER_BURST <const> = 10  -- 10 projectiles fired over 10 frames (1 per frame)
 local WIND_BURST_DURATION <const> = 10         -- Frames to fire all projectiles (1 per frame)
 local WIND_TOWER_COOLDOWN <const> = 34         -- 24 frame cooldown after burst (10 + 24 = 34 total)
-local WIND_ROTATION_SPEED <const> = math.pi / 12  -- Same rotation speed as other towers
-local WIND_PROJECTILE_DAMAGE <const> = 2       -- Moderate damage per projectile
+local WIND_ROTATION_SPEED <const> = math.pi / 15  -- 12° per frame = 360°/sec at 30fps
+local WIND_PROJECTILE_DAMAGE <const> = 7       -- Enhanced damage per projectile (2.0 DPS target)
 local WIND_SPIRAL_RADIUS <const> = 15          -- Radius of spirograph circle (pixels)
 
 -- ENHANCED: Wind tower pushback system - smooth animation with 3x distance
-local WIND_PUSHBACK_DISTANCE <const> = 27      -- Total pushback distance (3x original 9px)
+local WIND_PUSHBACK_DISTANCE <const> = 15      -- Reduced pushback distance to prevent infinite kiting
 local WIND_PUSHBACK_DURATION <const> = 9       -- Frames to complete pushback animation (50% slower)
 local WIND_PUSHBACK_COOLDOWN <const> = 15      -- Frames between pushback applications
 
@@ -454,16 +454,8 @@ local function loadBubbleSprites()
         gfx.popContext()
     end
     
-    -- Load tier 3 sprites
-    local tier3Sheet = gfx.image.new("assets/sprites/bubbles-tier-three")
-    local tier3Width, tier3Height = tier3Sheet:getSize()
-    for i = 1, 10 do
-        local spriteWidth = tier3Width / 10
-        sprites.tier3[i] = gfx.image.new(spriteWidth, tier3Height)
-        gfx.pushContext(sprites.tier3[i])
-        tier3Sheet:draw(-(i-1) * spriteWidth, 0)
-        gfx.popContext()
-    end
+    -- Load tier 3 sprites (single 84x84px sprite, not sliced)
+    sprites.tier3[1] = gfx.image.new("assets/sprites/bubbles-tier-three")
     
     -- Load creep sprites
     sprites.creeps.basic = gfx.image.new("assets/sprites/creeps-basic")
@@ -579,6 +571,7 @@ function Grid:setupGameState()
     self.isAnimating = false
     self.pendingPostCompactMergeCheck = false
     self.pendingContinuePostMerge = false
+    self.pendingChainMergeCheck = false
     self.gameOverFlashCount = 0
     self.flashTimer = 0
     
@@ -586,6 +579,7 @@ function Grid:setupGameState()
     self.tierOnePositions = {}  -- {idx -> {centerX, centerY, ballType, triangle}}
     self.tierTwoPositions = {}  -- {idx -> {centerX, centerY, sprite, pattern}}
     self.tierThreePositions = {} -- {idx -> {centerX, centerY, sprite, pattern}}
+    self.wardens = {} -- {id -> {x, y, sprite, hitpoints, targetX, targetY, lightningCooldown, state, tier}} -- Mobile Warden units
     self.avatars = {} -- {id -> {x, y, sprite, hitpoints, targetX, targetY, attackCooldown, state}}
     self.magnetismDelayCounter = 0  -- 8-frame delay before checking magnetism
     
@@ -623,89 +617,133 @@ function Grid:getLevelStartingPattern(level)
     -- Progressive starting grids based on level (cumulative additions)
     if level == 1 then
         -- Level 1: Base grid
+        -- 1-ABBxxxxxxxxxxxxxxxxx
+        -- 2-ABxxxxxxxxxxxxxxxxxxx
+        -- 3-ADExxxxxxxxxxxxxxxxx
+        -- 4-DDExxxxxxxxxxxxxxxxx
+        -- 5-xxECCxxxxxxxxxxxxxxx
+        -- 6-xxBCBxxxxxxxxxxxxxxx
+        -- 7-xxxBBBxxxxxxxxxxxxxx
+        -- 8-xxBEBxxxxxxxxxxxxxxx
+        -- 9-xxAEExxxxxxxxxxxxxxx
+        -- 10-BBAxxxxxxxxxxxxxxxxx
+        -- 11-CBAxxxxxxxxxxxxxxxxx
+        -- 12-CDxxxxxxxxxxxxxxxxxxx
+        -- 13-CDDxxxxxxxxxxxxxxxxx
+        -- 14-xxxxxxxxxxxxxxxxxxxx
+        -- 15-xxxxxxxxxxxxxxxxxxxx
         prePlacedCells = {
-            {{1,1}, "A"}, {{1,2}, "A"}, {{2,1}, "A"}, {{2,2}, "A"}, {{3,1}, "A"}, {{3,2}, "A"}, {{3,3}, "A"},
-            {{4,1}, "B"}, {{4,2}, "B"}, {{4,3}, "B"}, {{5,3}, "B"}, {{5,4}, "B"},
-            {{13,1}, "E"}, {{13,2}, "E"}, {{12,1}, "E"}, {{12,2}, "E"}, {{11,1}, "E"}, {{11,2}, "E"}, {{11,3}, "E"},
-            {{10,1}, "D"}, {{10,2}, "D"}, {{10,3}, "D"}, {{9,3}, "D"}, {{9,4}, "D"},
-            {{6,3}, "A"}, {{6,4}, "A"}, {{7,4}, "A"}, {{7,5}, "A"}, {{8,3}, "A"}, {{8,4}, "A"},
-            {{6,5}, "E"}, {{6,6}, "E"}, {{7,6}, "E"}, {{7,7}, "E"}, {{8,5}, "E"}, {{8,6}, "E"},
+            {{1,1}, "A"}, {{1,2}, "B"}, {{1,3}, "B"}, {{2,1}, "A"}, {{2,2}, "B"},
+            {{3,1}, "A"}, {{3,2}, "D"}, {{3,3}, "E"}, {{4,1}, "D"}, {{4,2}, "D"}, {{4,3}, "E"},
+            {{5,3}, "E"}, {{5,4}, "C"}, {{5,5}, "C"}, {{6,3}, "D"}, {{6,4}, "C"}, {{6,5}, "B"},
+            {{7,4}, "D"}, {{7,5}, "B"}, {{7,6}, "B"}, {{8,3}, "D"}, {{8,4}, "E"}, {{8,5}, "B"},
+            {{9,3}, "A"}, {{9,4}, "E"}, {{9,5}, "E"}, {{10,1}, "B"}, {{10,2}, "B"}, {{10,3}, "A"},
+            {{11,1}, "C"}, {{11,2}, "B"}, {{11,3}, "A"}, {{12,1}, "C"}, {{12,2}, "D"},
+            {{13,1}, "C"}, {{13,2}, "D"}, {{13,3}, "D"},
         }
     elseif level == 2 then
         -- Level 2: Base grid + additional groups
+        -- 1-ABBAxxxxxxxxxxxxxxxxx
+        -- 2-ABAAxxxxxxxxxxxxxxxxxx
+        -- 3-ADEDDxxxxxxxxxxxxxxxx
+        -- 4-DDEDAxxxxxxxxxxxxxxxx
+        -- 5-xxECCAxxxxxxxxxxxxxx
+        -- 6-xxBCBExxxxxxxxxxxxxx
+        -- 7-xxxBBBExxxxxxxxxxxxx
+        -- 8-xxBEBExxxxxxxxxxxxxx
+        -- 9-xxAEECxxxxxxxxxxxxxx
+        -- 10-BBADCxxxxxxxxxxxxxxx
+        -- 11-CBADDxxxxxxxxxxxxxxx
+        -- 12-CDDBxxxxxxxxxxxxxxxx
+        -- 13-CDDBxxxxxxxxxxxxxxxxx
+        -- 14-xxxxxxxxxxxxxxxxxxxx
+        -- 15-xxxxxxxxxxxxxxxxxxxx
         prePlacedCells = {
-            -- Level 1 base
-            {{1,1}, "A"}, {{1,2}, "A"}, {{2,1}, "A"}, {{2,2}, "A"}, {{3,1}, "A"}, {{3,2}, "A"}, {{3,3}, "A"},
-            {{4,1}, "B"}, {{4,2}, "B"}, {{4,3}, "B"}, {{5,3}, "B"}, {{5,4}, "B"},
-            {{13,1}, "E"}, {{13,2}, "E"}, {{12,1}, "E"}, {{12,2}, "E"}, {{11,1}, "E"}, {{11,2}, "E"}, {{11,3}, "E"},
-            {{10,1}, "D"}, {{10,2}, "D"}, {{10,3}, "D"}, {{9,3}, "D"}, {{9,4}, "D"},
-            {{6,3}, "A"}, {{6,4}, "A"}, {{7,4}, "A"}, {{7,5}, "A"}, {{8,3}, "A"}, {{8,4}, "A"},
-            {{6,5}, "E"}, {{6,6}, "E"}, {{7,6}, "E"}, {{7,7}, "E"}, {{8,5}, "E"}, {{8,6}, "E"},
-            -- Level 2 additions
-            {{1,3}, "E"}, {{1,4}, "E"}, {{2,3}, "E"}, {{2,4}, "E"},
-            {{3,4}, "D"}, {{3,5}, "D"}, {{4,4}, "D"}, {{4,5}, "D"}, {{5,5}, "D"}, {{5,6}, "D"},
-            {{13,3}, "A"}, {{13,4}, "A"}, {{12,3}, "A"}, {{12,4}, "A"},
-            {{11,4}, "B"}, {{11,5}, "B"}, {{10,4}, "B"}, {{10,5}, "B"}, {{9,5}, "B"}, {{9,6}, "B"},
+            {{1,1}, "A"}, {{1,2}, "B"}, {{1,3}, "B"}, {{1,4}, "A"}, {{2,1}, "A"}, {{2,2}, "B"}, {{2,3}, "A"}, {{2,4}, "A"},
+            {{3,1}, "A"}, {{3,2}, "D"}, {{3,3}, "E"}, {{3,4}, "D"}, {{3,5}, "D"}, {{4,1}, "D"}, {{4,2}, "D"}, {{4,3}, "E"}, {{4,4}, "D"}, {{4,5}, "A"},
+            {{5,3}, "E"}, {{5,4}, "C"}, {{5,5}, "C"}, {{5,6}, "A"}, {{6,3}, "D"}, {{6,4}, "C"}, {{6,5}, "B"}, {{6,6}, "E"},
+            {{7,4}, "D"}, {{7,5}, "B"}, {{7,6}, "B"}, {{7,7}, "E"}, {{8,3}, "D"}, {{8,4}, "E"}, {{8,5}, "B"}, {{8,6}, "E"},
+            {{9,3}, "A"}, {{9,4}, "E"}, {{9,5}, "E"}, {{9,6}, "C"}, {{10,1}, "B"}, {{10,2}, "B"}, {{10,3}, "A"}, {{10,4}, "D"}, {{10,5}, "C"},
+            {{11,1}, "C"}, {{11,2}, "B"}, {{11,3}, "A"}, {{11,4}, "D"}, {{11,5}, "D"}, {{12,1}, "C"}, {{12,2}, "D"}, {{12,3}, "D"}, {{12,4}, "B"},
+            {{13,1}, "C"}, {{13,2}, "D"}, {{13,3}, "D"}, {{13,4}, "B"},
         }
     elseif level == 3 then
         -- Level 3: Levels 1-2 + new additions
+        -- 1-ABBAxxxxxxxxxxxxxxxxx
+        -- 2-ABAAxxxxxxxxxxxxxxxxxx
+        -- 3-ADEDDxxxxxxxxxxxxxxxx
+        -- 4-DDEDAxxxxxxxxxxxxxxxx
+        -- 5-xxECCAxxxxxxxxxxxxxx
+        -- 6-xxBCBEBBBxxxxxxxxxxx
+        -- 7-xxxBBBEDDDDxxxxxxxxxx
+        -- 8-xxBEBEAAAxxxxxxxxxx
+        -- 9-xxAEECxxxxxxxxxxxxxx
+        -- 10-BBADCxxxxxxxxxxxxxxx
+        -- 11-CBADDxxxxxxxxxxxxxxx
+        -- 12-CDDBBxxxxxxxxxxxxxxxx
+        -- 13-CDDBxxxxxxxxxxxxxxxxx
+        -- 14-xxxxxxxxxxxxxxxxxxxx
+        -- 15-xxxxxxxxxxxxxxxxxxxx
         prePlacedCells = {
-            -- Levels 1-2 base
-            {{1,1}, "A"}, {{1,2}, "A"}, {{2,1}, "A"}, {{2,2}, "A"}, {{3,1}, "A"}, {{3,2}, "A"}, {{3,3}, "A"},
-            {{4,1}, "B"}, {{4,2}, "B"}, {{4,3}, "B"}, {{5,3}, "B"}, {{5,4}, "B"},
-            {{13,1}, "E"}, {{13,2}, "E"}, {{12,1}, "E"}, {{12,2}, "E"}, {{11,1}, "E"}, {{11,2}, "E"}, {{11,3}, "E"},
-            {{10,1}, "D"}, {{10,2}, "D"}, {{10,3}, "D"}, {{9,3}, "D"}, {{9,4}, "D"},
-            {{6,3}, "A"}, {{6,4}, "A"}, {{7,4}, "A"}, {{7,5}, "A"}, {{8,3}, "A"}, {{8,4}, "A"},
-            {{6,5}, "E"}, {{6,6}, "E"}, {{7,6}, "E"}, {{7,7}, "E"}, {{8,5}, "E"}, {{8,6}, "E"},
-            {{1,3}, "E"}, {{1,4}, "E"}, {{2,3}, "E"}, {{2,4}, "E"},
-            {{3,4}, "D"}, {{3,5}, "D"}, {{4,4}, "D"}, {{4,5}, "D"}, {{5,5}, "D"}, {{5,6}, "D"},
-            {{13,3}, "A"}, {{13,4}, "A"}, {{12,3}, "A"}, {{12,4}, "A"},
-            {{11,4}, "B"}, {{11,5}, "B"}, {{10,4}, "B"}, {{10,5}, "B"}, {{9,5}, "B"}, {{9,6}, "B"},
-            -- Level 3 additions
-            {{6,9}, "C"}, {{6,10}, "C"}, {{7,10}, "C"}, {{7,11}, "C"}, {{8,9}, "C"}, {{8,10}, "C"},
-            {{6,7}, "C"}, {{6,8}, "C"}, {{7,8}, "C"}, {{7,9}, "C"}, {{10,7}, "C"}, {{10,8}, "C"},
+            {{1,1}, "A"}, {{1,2}, "B"}, {{1,3}, "B"}, {{1,4}, "A"}, {{2,1}, "A"}, {{2,2}, "B"}, {{2,3}, "A"}, {{2,4}, "A"},
+            {{3,1}, "A"}, {{3,2}, "D"}, {{3,3}, "E"}, {{3,4}, "D"}, {{3,5}, "D"}, {{4,1}, "D"}, {{4,2}, "D"}, {{4,3}, "E"}, {{4,4}, "D"}, {{4,5}, "A"},
+            {{5,3}, "E"}, {{5,4}, "C"}, {{5,5}, "C"}, {{5,6}, "A"}, {{6,3}, "D"}, {{6,4}, "C"}, {{6,5}, "B"}, {{6,6}, "E"}, {{6,7}, "B"}, {{6,8}, "B"}, {{6,9}, "B"},
+            {{7,4}, "D"}, {{7,5}, "B"}, {{7,6}, "B"}, {{7,7}, "E"}, {{7,8}, "D"}, {{7,9}, "D"}, {{7,10}, "D"}, {{7,11}, "D"}, {{8,3}, "D"}, {{8,4}, "E"}, {{8,5}, "B"}, {{8,6}, "E"}, {{8,7}, "A"}, {{8,8}, "A"}, {{8,9}, "A"},
+            {{9,3}, "A"}, {{9,4}, "E"}, {{9,5}, "E"}, {{9,6}, "C"}, {{10,1}, "B"}, {{10,2}, "B"}, {{10,3}, "A"}, {{10,4}, "D"}, {{10,5}, "C"},
+            {{11,1}, "C"}, {{11,2}, "B"}, {{11,3}, "A"}, {{11,4}, "D"}, {{11,5}, "D"}, {{12,1}, "C"}, {{12,2}, "D"}, {{12,3}, "D"}, {{12,4}, "B"}, {{12,5}, "B"},
+            {{13,1}, "C"}, {{13,2}, "D"}, {{13,3}, "D"}, {{13,4}, "B"},
         }
     elseif level == 4 then
         -- Level 4: Levels 1-3 + new additions
+        -- 1-ABBAEExxxxxxxxxxxxxxx
+        -- 2-ABAAEBxxxxxxxxxxxxxxxx
+        -- 3-ADEDDBBxxxxxxxxxxxxxx
+        -- 4-DDEDACCAxxxxxxxxxxxxxx
+        -- 5-xxECCACAAxxxxxxxxxxx
+        -- 6-xxBCBEBBBBCxxxxxxxxxx
+        -- 7-xxxBBBEDDDDCxxxxxxxxx
+        -- 8-xxBEBEAAAACxxxxxxxxx
+        -- 9-xxAEECBDDxxxxxxxxxx
+        -- 10-BBBBDCBBDxxxxxxxxxx
+        -- 11-CBADDEExxxxxxxxxxxxx
+        -- 12-CDDBBCExxxxxxxxxxxxx
+        -- 13-CDDBCCxxxxxxxxxxxxxxx
+        -- 14-xxxxxxxxxxxxxxxxxxxx
+        -- 15-xxxxxxxxxxxxxxxxxxxx
         prePlacedCells = {
-            -- Levels 1-3 base
-            {{1,1}, "A"}, {{1,2}, "A"}, {{2,1}, "A"}, {{2,2}, "A"}, {{3,1}, "A"}, {{3,2}, "A"}, {{3,3}, "A"},
-            {{4,1}, "B"}, {{4,2}, "B"}, {{4,3}, "B"}, {{5,3}, "B"}, {{5,4}, "B"},
-            {{13,1}, "E"}, {{13,2}, "E"}, {{12,1}, "E"}, {{12,2}, "E"}, {{11,1}, "E"}, {{11,2}, "E"}, {{11,3}, "E"},
-            {{10,1}, "D"}, {{10,2}, "D"}, {{10,3}, "D"}, {{9,3}, "D"}, {{9,4}, "D"},
-            {{6,3}, "A"}, {{6,4}, "A"}, {{7,4}, "A"}, {{7,5}, "A"}, {{8,3}, "A"}, {{8,4}, "A"},
-            {{6,5}, "E"}, {{6,6}, "E"}, {{7,6}, "E"}, {{7,7}, "E"}, {{8,5}, "E"}, {{8,6}, "E"},
-            {{1,3}, "E"}, {{1,4}, "E"}, {{2,3}, "E"}, {{2,4}, "E"},
-            {{3,4}, "D"}, {{3,5}, "D"}, {{4,4}, "D"}, {{4,5}, "D"}, {{5,5}, "D"}, {{5,6}, "D"},
-            {{13,3}, "A"}, {{13,4}, "A"}, {{12,3}, "A"}, {{12,4}, "A"},
-            {{11,4}, "B"}, {{11,5}, "B"}, {{10,4}, "B"}, {{10,5}, "B"}, {{9,5}, "B"}, {{9,6}, "B"},
-            {{6,9}, "C"}, {{6,10}, "C"}, {{7,10}, "C"}, {{7,11}, "C"}, {{8,9}, "C"}, {{8,10}, "C"},
-            {{6,7}, "C"}, {{6,8}, "C"}, {{7,8}, "C"}, {{7,9}, "C"}, {{10,7}, "C"}, {{10,8}, "C"},
-            -- Level 4 additions
-            {{1,9}, "C"}, {{1,10}, "C"}, {{1,11}, "C"}, {{2,9}, "C"}, {{2,10}, "C"},
-            {{13,9}, "C"}, {{13,10}, "C"}, {{13,11}, "C"}, {{12,9}, "C"}, {{12,10}, "C"},
+            {{1,1}, "A"}, {{1,2}, "B"}, {{1,3}, "B"}, {{1,4}, "A"}, {{1,5}, "E"}, {{1,6}, "E"}, {{2,1}, "A"}, {{2,2}, "B"}, {{2,3}, "A"}, {{2,4}, "A"}, {{2,5}, "E"}, {{2,6}, "B"},
+            {{3,1}, "A"}, {{3,2}, "D"}, {{3,3}, "E"}, {{3,4}, "D"}, {{3,5}, "D"}, {{3,6}, "B"}, {{3,7}, "B"}, {{4,1}, "D"}, {{4,2}, "D"}, {{4,3}, "E"}, {{4,4}, "D"}, {{4,5}, "A"}, {{4,6}, "C"}, {{4,7}, "C"}, {{4,8}, "A"},
+            {{5,3}, "E"}, {{5,4}, "C"}, {{5,5}, "C"}, {{5,6}, "A"}, {{5,7}, "C"}, {{5,8}, "A"}, {{5,9}, "A"}, {{6,3}, "D"}, {{6,4}, "C"}, {{6,5}, "B"}, {{6,6}, "E"}, {{6,7}, "B"}, {{6,8}, "B"}, {{6,9}, "B"}, {{6,10}, "B"}, {{6,11}, "C"},
+            {{7,4}, "D"}, {{7,5}, "B"}, {{7,6}, "B"}, {{7,7}, "E"}, {{7,8}, "D"}, {{7,9}, "D"}, {{7,10}, "D"}, {{7,11}, "D"}, {{7,12}, "C"}, {{8,3}, "D"}, {{8,4}, "E"}, {{8,5}, "B"}, {{8,6}, "E"}, {{8,7}, "A"}, {{8,8}, "A"}, {{8,9}, "A"}, {{8,10}, "A"}, {{8,11}, "C"},
+            {{9,3}, "A"}, {{9,4}, "E"}, {{9,5}, "E"}, {{9,6}, "C"}, {{9,7}, "B"}, {{9,8}, "D"}, {{9,9}, "D"}, {{10,1}, "B"}, {{10,2}, "B"}, {{10,3}, "A"}, {{10,4}, "D"}, {{10,5}, "C"}, {{10,6}, "B"}, {{10,7}, "B"}, {{10,8}, "D"},
+            {{11,1}, "C"}, {{11,2}, "B"}, {{11,3}, "A"}, {{11,4}, "D"}, {{11,5}, "D"}, {{11,6}, "E"}, {{11,7}, "E"}, {{12,1}, "C"}, {{12,2}, "D"}, {{12,3}, "D"}, {{12,4}, "B"}, {{12,5}, "B"}, {{12,6}, "C"}, {{12,7}, "E"},
+            {{13,1}, "C"}, {{13,2}, "D"}, {{13,3}, "D"}, {{13,4}, "B"}, {{13,5}, "C"}, {{13,6}, "C"},
         }
     else
         -- Level 5+: Levels 1-4 + final additions
+        -- 1-ABBAEExxxxxxxxxxxxxxx
+        -- 2-ABAAEBxxxxxxxxxxxxxxxx
+        -- 3-ADEDDBBxxxxxxxxxxxxxx
+        -- 4-DDEDACCAEExxxxxxxxxx
+        -- 5-xxECCACAEAAxxxxxxxxxxx
+        -- 6-xxBCBEBBBBCAxxxxxxxxx
+        -- 7-xxxBBBEDDDDCCxxxxxxxx
+        -- 8-xxBEBEAAAACDxxxxxxxx
+        -- 9-xxAEECBDDBDDxxxxxxxx
+        -- 10-BBBBDCBBDBBxxxxxxxxx
+        -- 11-CBADDEExxxxxxxxxxxxx
+        -- 12-CDDBBCExxxxxxxxxxxxx
+        -- 13-CDDBCCxxxxxxxxxxxxxxx
+        -- 14-xxxxxxxxxxxxxxxxxxxx
+        -- 15-xxxxxxxxxxxxxxxxxxxx
         prePlacedCells = {
-            -- Levels 1-4 base
-            {{1,1}, "A"}, {{1,2}, "A"}, {{2,1}, "A"}, {{2,2}, "A"}, {{3,1}, "A"}, {{3,2}, "A"}, {{3,3}, "A"},
-            {{4,1}, "B"}, {{4,2}, "B"}, {{4,3}, "B"}, {{5,3}, "B"}, {{5,4}, "B"},
-            {{13,1}, "E"}, {{13,2}, "E"}, {{12,1}, "E"}, {{12,2}, "E"}, {{11,1}, "E"}, {{11,2}, "E"}, {{11,3}, "E"},
-            {{10,1}, "D"}, {{10,2}, "D"}, {{10,3}, "D"}, {{9,3}, "D"}, {{9,4}, "D"},
-            {{6,3}, "A"}, {{6,4}, "A"}, {{7,4}, "A"}, {{7,5}, "A"}, {{8,3}, "A"}, {{8,4}, "A"},
-            {{6,5}, "E"}, {{6,6}, "E"}, {{7,6}, "E"}, {{7,7}, "E"}, {{8,5}, "E"}, {{8,6}, "E"},
-            {{1,3}, "E"}, {{1,4}, "E"}, {{2,3}, "E"}, {{2,4}, "E"},
-            {{3,4}, "D"}, {{3,5}, "D"}, {{4,4}, "D"}, {{4,5}, "D"}, {{5,5}, "D"}, {{5,6}, "D"},
-            {{13,3}, "A"}, {{13,4}, "A"}, {{12,3}, "A"}, {{12,4}, "A"},
-            {{11,4}, "B"}, {{11,5}, "B"}, {{10,4}, "B"}, {{10,5}, "B"}, {{9,5}, "B"}, {{9,6}, "B"},
-            {{6,9}, "C"}, {{6,10}, "C"}, {{7,10}, "C"}, {{7,11}, "C"}, {{8,9}, "C"}, {{8,10}, "C"},
-            {{6,7}, "C"}, {{6,8}, "C"}, {{7,8}, "C"}, {{7,9}, "C"}, {{10,7}, "C"}, {{10,8}, "C"},
-            {{1,9}, "C"}, {{1,10}, "C"}, {{1,11}, "C"}, {{2,9}, "C"}, {{2,10}, "C"},
-            {{13,9}, "C"}, {{13,10}, "C"}, {{13,11}, "C"}, {{12,9}, "C"}, {{12,10}, "C"},
-            -- Level 5+ additions
-            {{4,6}, "A"}, {{4,7}, "A"}, {{5,7}, "A"}, {{5,8}, "A"},
-            {{9,7}, "A"}, {{9,8}, "A"}, {{10,6}, "A"}, {{10,7}, "A"},
+            {{1,1}, "A"}, {{1,2}, "B"}, {{1,3}, "B"}, {{1,4}, "A"}, {{1,5}, "E"}, {{1,6}, "E"}, {{2,1}, "A"}, {{2,2}, "B"}, {{2,3}, "A"}, {{2,4}, "A"}, {{2,5}, "E"}, {{2,6}, "B"},
+            {{3,1}, "A"}, {{3,2}, "D"}, {{3,3}, "E"}, {{3,4}, "D"}, {{3,5}, "D"}, {{3,6}, "B"}, {{3,7}, "B"}, {{4,1}, "D"}, {{4,2}, "D"}, {{4,3}, "E"}, {{4,4}, "D"}, {{4,5}, "A"}, {{4,6}, "C"}, {{4,7}, "C"}, {{4,8}, "A"}, {{4,9}, "E"}, {{4,10}, "E"},
+            {{5,3}, "E"}, {{5,4}, "C"}, {{5,5}, "C"}, {{5,6}, "A"}, {{5,7}, "C"}, {{5,8}, "A"}, {{5,9}, "A"}, {{5,10}, "E"}, {{5,11}, "A"}, {{5,12}, "A"}, {{6,3}, "D"}, {{6,4}, "C"}, {{6,5}, "B"}, {{6,6}, "E"}, {{6,7}, "B"}, {{6,8}, "B"}, {{6,9}, "B"}, {{6,10}, "B"}, {{6,11}, "C"}, {{6,12}, "A"},
+            {{7,4}, "D"}, {{7,5}, "B"}, {{7,6}, "B"}, {{7,7}, "E"}, {{7,8}, "D"}, {{7,9}, "D"}, {{7,10}, "D"}, {{7,11}, "D"}, {{7,12}, "C"}, {{7,13}, "C"}, {{8,3}, "D"}, {{8,4}, "E"}, {{8,5}, "B"}, {{8,6}, "E"}, {{8,7}, "A"}, {{8,8}, "A"}, {{8,9}, "A"}, {{8,10}, "A"}, {{8,11}, "C"}, {{8,12}, "D"},
+            {{9,3}, "A"}, {{9,4}, "E"}, {{9,5}, "E"}, {{9,6}, "C"}, {{9,7}, "B"}, {{9,8}, "D"}, {{9,9}, "D"}, {{9,10}, "B"}, {{9,11}, "D"}, {{9,12}, "D"}, {{10,1}, "B"}, {{10,2}, "B"}, {{10,3}, "A"}, {{10,4}, "D"}, {{10,5}, "C"}, {{10,6}, "B"}, {{10,7}, "B"}, {{10,8}, "D"}, {{10,9}, "B"}, {{10,10}, "B"},
+            {{11,1}, "C"}, {{11,2}, "B"}, {{11,3}, "A"}, {{11,4}, "D"}, {{11,5}, "D"}, {{11,6}, "E"}, {{11,7}, "E"}, {{12,1}, "C"}, {{12,2}, "D"}, {{12,3}, "D"}, {{12,4}, "B"}, {{12,5}, "B"}, {{12,6}, "C"}, {{12,7}, "E"},
+            {{13,1}, "C"}, {{13,2}, "D"}, {{13,3}, "D"}, {{13,4}, "B"}, {{13,5}, "C"}, {{13,6}, "C"},
         }
     end
     
@@ -937,6 +975,8 @@ function Grid:collectLivingTowers()
             }
         end
     end
+    
+    -- Note: Wardens are now mobile units, not towers, so they don't participate in compacting
     
     return towers
 end
@@ -1192,9 +1232,11 @@ function Grid:getTowerRadius(towerType)
     if towerType == "tier1" then
         return 16 -- Slightly less than 36px/2 for tighter packing
     elseif towerType == "tier2" then
-        return 24 -- Slightly less than 52px/2 for tighter packing
+        return 20 -- Reduced from 24 to 20 for tighter packing and easier merging
     elseif towerType == "tier3" then
         return 40 -- Slightly less than 84px/2 for tighter packing
+    elseif towerType == "warden" then
+        return 8 -- 16/2 for 16x16px sprite
     end
     return 10 -- fallback
 end
@@ -1224,7 +1266,7 @@ function Grid:checkPostCompactMerges()
         local tier2Merge = self:findPostCompactTier2Merge()
         if tier2Merge then
             print("DEBUG: Found Tier 2 merge, starting magnetism")
-            self:startTierThreeMagnetism(tier2Merge.t2a, tier2Merge.t2b, tier2Merge.sprite)
+            self:startTierThreeMagnetism(tier2Merge.t2a, tier2Merge.t2b, tier2Merge.sprite, tier2Merge.unitType)
             return -- Process one merge at a time
         end
     end
@@ -1286,16 +1328,21 @@ function Grid:findPostCompactTier2Merge()
         }
     end
     
-    -- Check for Tier 3 combinations (touching distance)
+    -- Check for Tier 2 to Tier 3 combinations (magnetic distance)
     for i = 1, #tierTwos do
         for j = i + 1, #tierTwos do
             local t2a, t2b = tierTwos[i], tierTwos[j]
-            local tier3Sprite = MergeConstants.getTierThreeSprite(t2a.sprite, t2b.sprite)
+            local distance = self:getDistance(t2a.centerX, t2a.centerY, t2b.centerX, t2b.centerY)
             
-            if tier3Sprite then
-                local distance = self:getDistance(t2a.centerX, t2a.centerY, t2b.centerX, t2b.centerY)
-                if distance <= TIER2_MERGE_DISTANCE then -- Touching distance for Tier 2 towers
-                    return {t2a = t2a, t2b = t2b, sprite = tier3Sprite}
+            if distance <= MAGNETIC_TIER2_DISTANCE then -- Use magnetic distance for post-compact merges
+                local tier3Sprite = MergeConstants.getTierThreeSprite(t2a.sprite, t2b.sprite)
+                
+                if tier3Sprite then
+                    -- Avatar combination found
+                    return {t2a = t2a, t2b = t2b, sprite = tier3Sprite, unitType = "avatar"}
+                else
+                    -- Warden combination (any other Tier 2 merge)
+                    return {t2a = t2a, t2b = t2b, sprite = 1, unitType = "warden"}
                 end
             end
         end
@@ -1315,30 +1362,330 @@ function Grid:continuePostMergeSequence()
         return
     end
     
-    -- After a merge completes, restart the compacting sequence
+    -- Implement iterative merge loop until no more merges are possible
+    self:processAllMergesIteratively()
+end
+
+-- Process all possible merges iteratively until convergence
+function Grid:processAllMergesIteratively()
+    local maxIterations = 10  -- Prevent infinite loops
+    local iteration = 0
+    
+    while iteration < maxIterations do
+        iteration = iteration + 1
+        print("DEBUG: Merge iteration " .. iteration)
+        
+        -- Check for all possible merges in current state
+        local foundMerges = self:findAllPossibleMerges()
+        
+        if #foundMerges == 0 then
+            print("DEBUG: No more merges found after " .. (iteration - 1) .. " iterations")
+            break
+        end
+        
+        print("DEBUG: Found " .. #foundMerges .. " merges to process")
+        
+        -- Process all found merges
+        for _, merge in ipairs(foundMerges) do
+            if merge.type == "tier1" then
+                self:processImediateTier1Merge(merge)
+            elseif merge.type == "tier2" then
+                self:processImediateTier2Merge(merge)
+            end
+        end
+        
+        -- Compact towers after merges (quick positioning without animation)
+        self:quickCompactTowersAfterMerges()
+    end
+    
+    -- All merges complete, finish level advancement
     local livingTowers = self:collectLivingTowers()
-    print("DEBUG: Found " .. #livingTowers .. " living towers after merge")
+    print("DEBUG: Final merge iteration complete. " .. #livingTowers .. " towers remaining")
     
     if #livingTowers > 0 then
-        -- Compact again after the merge
-        print("DEBUG: Restarting tower compacting after merge")
+        -- Do final compacting with animation before level start
+        print("DEBUG: Final tower compacting before level advancement")
         self:startTowerCompacting(livingTowers)
     else
         -- No towers left, finish level advancement
-        print("DEBUG: No towers left after merge, finishing level advancement")
+        print("DEBUG: No towers left after all merges, finishing level advancement")
         print("DEBUG: Setting isPostAttackSequence = false")
         self.isPostAttackSequence = false -- Clear the flag
         self:finishLevelAdvancement()
     end
 end
 
+-- Find all possible merges in current state (both Tier 1 and Tier 2)
+function Grid:findAllPossibleMerges()
+    local allMerges = {}
+    
+    -- Find all Tier 1 merges (T1 + T1 → T2) if unlocked
+    if self.currentLevel > 1 then
+        local tier1Merges = self:findAllTier1Merges()
+        for _, merge in ipairs(tier1Merges) do
+            allMerges[#allMerges + 1] = merge
+        end
+    end
+    
+    -- Find all Tier 2 merges (T2 + T2 → T3) if unlocked
+    if self.currentLevel > 2 then
+        local tier2Merges = self:findAllTier2Merges()
+        for _, merge in ipairs(tier2Merges) do
+            allMerges[#allMerges + 1] = merge
+        end
+    end
+    
+    return allMerges
+end
+
+-- Find all possible Tier 1 merges
+function Grid:findAllTier1Merges()
+    local merges = {}
+    local tierOnes = {}
+    
+    -- Collect all Tier 1 towers
+    for idx, tierOneData in pairs(self.tierOnePositions) do
+        tierOnes[#tierOnes + 1] = {
+            idx = idx,
+            ballType = tierOneData.ballType,
+            centerX = tierOneData.centerX,
+            centerY = tierOneData.centerY,
+            triangle = tierOneData.triangle
+        }
+    end
+    
+    -- Check all pairs for magnetic combinations
+    for i = 1, #tierOnes do
+        for j = i + 1, #tierOnes do
+            local t1, t2 = tierOnes[i], tierOnes[j]
+            
+            -- Check if different types (required for Tier 2)
+            if t1.ballType ~= t2.ballType then
+                local distance = self:getDistance(t1.centerX, t1.centerY, t2.centerX, t2.centerY)
+                
+                if distance <= TIER1_MERGE_DISTANCE then
+                    merges[#merges + 1] = {
+                        type = "tier1",
+                        t1 = t1,
+                        t2 = t2
+                    }
+                end
+            end
+        end
+    end
+    
+    return merges
+end
+
+-- Find all possible Tier 2 merges
+function Grid:findAllTier2Merges()
+    local merges = {}
+    local tierTwos = {}
+    
+    -- Collect all Tier 2 towers
+    for idx, tierTwoData in pairs(self.tierTwoPositions) do
+        tierTwos[#tierTwos + 1] = {
+            idx = idx,
+            sprite = tierTwoData.sprite,
+            centerX = tierTwoData.centerX,
+            centerY = tierTwoData.centerY,
+            pattern = tierTwoData.pattern
+        }
+    end
+    
+    -- Check all pairs for magnetic combinations
+    for i = 1, #tierTwos do
+        for j = i + 1, #tierTwos do
+            local t2a, t2b = tierTwos[i], tierTwos[j]
+            local distance = self:getDistance(t2a.centerX, t2a.centerY, t2b.centerX, t2b.centerY)
+            
+            if distance <= MAGNETIC_TIER2_DISTANCE then
+                local tier3Sprite = MergeConstants.getTierThreeSprite(t2a.sprite, t2b.sprite)
+                
+                local unitType = "warden"  -- Default to warden
+                if tier3Sprite then
+                    unitType = "avatar"  -- Avatar if valid combination
+                end
+                
+                merges[#merges + 1] = {
+                    type = "tier2",
+                    t2a = t2a,
+                    t2b = t2b,
+                    sprite = tier3Sprite or 1,
+                    unitType = unitType
+                }
+            end
+        end
+    end
+    
+    return merges
+end
+
+-- Process Tier 1 merge immediately (without animation)
+function Grid:processImediateTier1Merge(merge)
+    print("DEBUG: Processing immediate T1 merge: " .. merge.t1.ballType .. " + " .. merge.t2.ballType)
+    
+    -- Get the actual tower data from the indices
+    local tier1A = self.tierOnePositions[merge.t1.idx]
+    local tier1B = self.tierOnePositions[merge.t2.idx]
+    
+    -- Clear the source towers
+    if tier1A then self:clearTierOne(tier1A) end
+    if tier1B then self:clearTierOne(tier1B) end
+    
+    -- Remove from tracking table
+    self.tierOnePositions[merge.t1.idx] = nil
+    self.tierOnePositions[merge.t2.idx] = nil
+    
+    -- Calculate center point and sprite
+    local centerX = (merge.t1.centerX + merge.t2.centerX) / 2
+    local centerY = (merge.t1.centerY + merge.t2.centerY) / 2
+    local sprite = self:getTierTwoSprite(merge.t1.ballType, merge.t2.ballType)
+    
+    -- Create Tier 2 immediately (without animation)
+    local newTier2Idx = self:createTierTwoImmediately(centerX, centerY, sprite)
+    
+    -- Check for immediate chain merge (T2 + T2 → T3)
+    if newTier2Idx then
+        print("DEBUG: Chain merge - checking new Tier 2 at index " .. newTier2Idx)
+        self:checkImmediateChainMergeForNewTierTwo(newTier2Idx)
+    end
+end
+
+-- Process Tier 2 merge immediately (without animation)
+function Grid:processImediateTier2Merge(merge)
+    print("DEBUG: Processing immediate T2 merge: " .. merge.t2a.sprite .. " + " .. merge.t2b.sprite .. " → " .. merge.unitType)
+    
+    -- Get the actual tower data from the indices
+    local tier2A = self.tierTwoPositions[merge.t2a.idx]
+    local tier2B = self.tierTwoPositions[merge.t2b.idx]
+    
+    -- Clear the source towers
+    if tier2A then self:clearTierTwo(tier2A) end
+    if tier2B then self:clearTierTwo(tier2B) end
+    
+    -- Remove from tracking table
+    self.tierTwoPositions[merge.t2a.idx] = nil
+    self.tierTwoPositions[merge.t2b.idx] = nil
+    
+    -- Calculate center point
+    local centerX = (merge.t2a.centerX + merge.t2b.centerX) / 2
+    local centerY = (merge.t2a.centerY + merge.t2b.centerY) / 2
+    
+    -- Create appropriate unit type immediately
+    if merge.unitType == "avatar" then
+        self:createAvatarImmediately(centerX, centerY, merge.sprite)
+    else
+        self:createWardenImmediately(centerX, centerY, merge.sprite)
+    end
+end
+
+-- Create Tier 2 tower immediately without animation
+function Grid:createTierTwoImmediately(centerX, centerY, sprite)
+    -- Find valid position for 7-cell pattern
+    local centerIdx, pattern = self:findValidTierTwoPlacement(centerX, centerY)
+    if not centerIdx then 
+        centerIdx, pattern = self:findEmergencyTierTwoPlacement(centerX, centerY)
+        if not centerIdx then
+            print("CRITICAL: Could not place Tier 2 tower - tower lost")
+            return nil
+        end
+    end
+    
+    local gridPos = self.positions[centerIdx]
+    
+    -- Mark all pattern cells as tier 2 immediately
+    for _, idx in ipairs(pattern) do
+        self.cells[idx].ballType = sprite
+        self.cells[idx].occupied = true
+        self.cells[idx].tier = "tier2"
+    end
+    
+    -- Create tower data immediately
+    self.tierTwoPositions[centerIdx] = {
+        centerX = gridPos.x,
+        centerY = gridPos.y,
+        sprite = sprite,
+        pattern = pattern,
+        ballType = 4,  -- All Tier 2 towers are Lightning towers
+        hitpoints = TOWER_HP,
+        maxHitpoints = TOWER_HP,
+        lastAttackTime = 0,
+        lightningSequenceActive = false,
+        lightningSequenceProgress = 0,
+        lightningBoltsFired = 0,
+        currentAngle = 0,
+        targetAngle = 0,
+        currentTarget = nil
+    }
+    
+    return centerIdx  -- Return the center index for chain merge checking
+end
+
+-- Create Avatar immediately without animation
+function Grid:createAvatarImmediately(centerX, centerY, sprite)
+    print("DEBUG: Creating Avatar immediately at " .. centerX .. "," .. centerY)
+    
+    local avatarId = #self.avatars + 1
+    self.avatars[avatarId] = {
+        x = centerX,
+        y = centerY,
+        sprite = sprite,
+        hitpoints = AVATAR_HP,
+        targetX = nil,
+        targetY = nil,
+        attackCooldown = 0,
+        state = "ready"
+    }
+end
+
+-- Create Warden immediately without animation  
+function Grid:createWardenImmediately(centerX, centerY, sprite)
+    print("DEBUG: Creating Warden immediately at " .. centerX .. "," .. centerY)
+    
+    local wardenId = #self.wardens + 1
+    self.wardens[wardenId] = {
+        x = centerX,
+        y = centerY,
+        targetX = 40, -- Rally point (7,2) x coordinate
+        targetY = 104, -- Rally point (7,2) y coordinate  
+        sprite = sprite,
+        hitpoints = math.floor(AVATAR_HP * 0.66), -- 792 HP
+        maxHitpoints = math.floor(AVATAR_HP * 0.66),
+        lightningCooldown = 0,
+        movementSpeed = 0.8,
+        state = "rallying",
+        tier = "warden",
+        size = 16,
+        rallyComplete = false,
+        currentTarget = nil
+    }
+    print("DEBUG: Warden created with ID " .. wardenId .. ", total wardens: " .. #self.wardens)
+end
+
+-- Quick tower compacting without animation (just positioning)
+function Grid:quickCompactTowersAfterMerges()
+    -- This is a simplified compacting that just adjusts positions slightly
+    -- without full animation - just enough to enable more merges
+    
+    -- For now, we'll skip this step as the merge detection should work
+    -- with current positions. If needed, we can add basic leftward shifts here.
+    print("DEBUG: Quick compacting after merges (currently no-op)")
+end
+
 -- Original level advancement logic, now called after compacting sequence completes
 function Grid:finishLevelAdvancement()
     print("DEBUG: finishLevelAdvancement() called for level " .. self.currentLevel)
-    -- Store current tower positions for preservation
+    
+    -- Ensure all Wardens have reached rally point before level starts
+    self:ensureWardensRallied()
+    
+    -- Store current tower positions, wardens, and avatars for preservation
     local preservedTierOnePositions = {}
     local preservedTierTwoPositions = {}
     local preservedTierThreePositions = {}
+    local preservedWardens = {}
+    local preservedAvatars = {}
     
     -- Copy living towers to preserved tables
     for idx, tower in pairs(self.tierOnePositions) do
@@ -1357,12 +1704,28 @@ function Grid:finishLevelAdvancement()
         end
     end
     
-    -- Count preserved towers
-    local t1Count, t2Count, t3Count = 0, 0, 0
+    -- Copy living wardens to preserved table
+    for id, warden in ipairs(self.wardens) do
+        if warden.hitpoints > 0 and warden.state ~= "dead" then
+            preservedWardens[id] = warden
+        end
+    end
+    
+    -- Copy living avatars to preserved table
+    for id, avatar in ipairs(self.avatars) do
+        if avatar.hitpoints > 0 then
+            preservedAvatars[id] = avatar
+        end
+    end
+    
+    -- Count preserved towers, wardens, and avatars
+    local t1Count, t2Count, t3Count, wardenCount, avatarCount = 0, 0, 0, 0, 0
     for _ in pairs(preservedTierOnePositions) do t1Count = t1Count + 1 end
     for _ in pairs(preservedTierTwoPositions) do t2Count = t2Count + 1 end
     for _ in pairs(preservedTierThreePositions) do t3Count = t3Count + 1 end
-    print("DEBUG: Preserved " .. t1Count .. " T1, " .. t2Count .. " T2, " .. t3Count .. " T3 towers")
+    for _ in pairs(preservedWardens) do wardenCount = wardenCount + 1 end
+    for _ in pairs(preservedAvatars) do avatarCount = avatarCount + 1 end
+    print("DEBUG: Preserved " .. t1Count .. " T1, " .. t2Count .. " T2, " .. t3Count .. " T3 towers, " .. wardenCount .. " wardens, " .. avatarCount .. " avatars")
     
     -- Clear existing grid (except permanent boundaries and preserved towers)
     for idx, cell in pairs(self.cells) do
@@ -1408,15 +1771,17 @@ function Grid:finishLevelAdvancement()
         end
     end
     
-    -- Restore preserved towers
+    -- Restore preserved towers, wardens, and avatars
     self.tierOnePositions = preservedTierOnePositions
     self.tierTwoPositions = preservedTierTwoPositions
     self.tierThreePositions = preservedTierThreePositions
+    self.wardens = preservedWardens
+    self.avatars = preservedAvatars
     
     -- Clear units and combat systems for fresh start
     self.creeps = {}
     self.troops = {}
-    self.avatars = {}
+    -- Note: wardens and avatars are NOT cleared - they persist between levels like towers
     self.projectiles = {}
     self.rainDots = {}
     self.lightningEffects = {}
@@ -1462,8 +1827,8 @@ function Grid:checkForVictory()
         end
         
         if shouldAdvance then
-            if self.currentLevel == 5 then
-                -- Final victory on level 5
+            if false then -- Removed victory condition - game continues indefinitely
+                -- Final victory on level 5 (DISABLED)
                 print("DEBUG: Victory on level 5 - setting gameState to victory")
                 self.gameState = "victory"
             elseif self.currentLevel == 1 then
@@ -1508,6 +1873,9 @@ function Grid:handleInput()
         end
         return
     elseif self.gameState == "tier2_unlock" or self.gameState == "tier3_unlock" then
+        -- Allow Wardens to move to rally point during unlock screens
+        self:updateWardens()
+        
         if pd.buttonJustPressed(pd.kButtonA) then
             -- Continue to next level after unlock message
             print("DEBUG: A pressed during unlock screen, calling advanceToNextLevel()")
@@ -1606,6 +1974,7 @@ function Grid:update()
     self:updateCreeps()
     self:checkForFinalAttack()  -- Check if converted creeps are staged and ready for final attack
     self:updateTroops()
+    self:updateWardens()
     self:updateAvatars()
     self:updateTowerCombat()
     self:updateProjectiles()
@@ -1730,6 +2099,19 @@ function Grid:checkBallCollision()
         local tier3Radius = 49 -- 84/2 + 7 for reasonable collision
         if distSq <= (tier3Radius * tier3Radius) then
             return true
+        end
+    end
+    
+    -- Check mobile warden units (collision with center point, small mobile units)
+    for _, warden in ipairs(self.wardens) do
+        if warden.hitpoints > 0 then
+            local dx = self.ball.x - warden.x
+            local dy = self.ball.y - warden.y
+            local distSq = dx * dx + dy * dy
+            local wardenRadius = warden.size / 2 + 5 -- 16/2 + 5 = 13px collision radius
+            if distSq <= (wardenRadius * wardenRadius) then
+                return true
+            end
         end
     end
     
@@ -1921,6 +2303,10 @@ function Grid:updateAnimations()
                 -- Check if this is part of post-attack sequence
                 if self.isPostAttackSequence then
                     self:continuePostMergeSequence()
+                else
+                    -- Check for additional merges after creating new Tier 2
+                    -- This allows chain merging: T1+T1→T2, then T2+T2→T3
+                    self:scheduleNextMergeCheck()
                 end
                 -- Don't keep this animation
             else
@@ -1957,6 +2343,9 @@ function Grid:updateAnimations()
                 
                 -- Note: No longer spawn troops when towers form - towers are the defensive units
                 
+                -- Check for immediate Tier 2 to Tier 3 chain merge
+                self:checkChainMergeForNewTierTwo(anim.centerIdx)
+                
                 -- Check if this is part of post-attack sequence
                 if self.isPostAttackSequence then
                     self:continuePostMergeSequence()
@@ -1971,11 +2360,22 @@ function Grid:updateAnimations()
                 -- Complete tier 3 magnetism - remove both tier 2 bubbles, create tier 3
                 self:clearTierTwo(anim.tierTwoA)
                 self:clearTierTwo(anim.tierTwoB)
-                self:placeTierThree(anim.endX, anim.endY, anim.sprite)
+                
+                if anim.unitType == "warden" then
+                    print("DEBUG: tier3_magnetism complete - creating WARDEN at " .. anim.endX .. "," .. anim.endY)
+                    self:placeTierThreeWarden(anim.endX, anim.endY, anim.sprite)
+                else
+                    -- Default to avatar
+                    print("DEBUG: tier3_magnetism complete - creating AVATAR at " .. anim.endX .. "," .. anim.endY)
+                    self:placeTierThree(anim.endX, anim.endY, anim.sprite)
+                end
                 
                 -- Check if this is part of post-attack sequence
                 if self.isPostAttackSequence then
                     self:continuePostMergeSequence()
+                else
+                    -- Check for additional merges after creating Tier 3 unit
+                    self:scheduleNextMergeCheck()
                 end
                 -- Don't keep this animation
             else
@@ -2022,6 +2422,7 @@ function Grid:updateAnimations()
                     elseif tower.type == "tier3" then
                         self.tierThreePositions[tower.idx].centerX = compactingTower.endX
                         self.tierThreePositions[tower.idx].centerY = compactingTower.endY
+                    -- Note: Wardens are mobile units and don't participate in tower compacting
                     end
                 end
                 -- Set flag to check merges on next frame (after isAnimating is cleared)
@@ -2082,6 +2483,63 @@ function Grid:updateAnimations()
             else
                 activeAnimations[#activeAnimations + 1] = anim
             end
+        elseif anim.type == "warden_snap" then
+            if progress >= 1.0 then
+                -- Clear any stomped tier bubbles from tracking tables before placing warden unit
+                for _, idx in ipairs(anim.pattern) do
+                    -- Remove from tier 1 positions if stomped
+                    if self.tierOnePositions[idx] then
+                        self.tierOnePositions[idx] = nil
+                    end
+                    
+                    -- Remove from tier 2 positions if stomped (check all patterns)
+                    for tierIdx, tierData in pairs(self.tierTwoPositions) do
+                        for _, patternIdx in ipairs(tierData.pattern) do
+                            if patternIdx == idx then
+                                self.tierTwoPositions[tierIdx] = nil
+                                break
+                            end
+                        end
+                    end
+                end
+                
+                -- Complete grid snapping - mark all pattern cells as tier 3 for flashing
+                for _, idx in ipairs(anim.pattern) do
+                    self.cells[idx].ballType = anim.sprite
+                    self.cells[idx].occupied = true
+                    self.cells[idx].tier = "tier3"
+                end
+                
+                -- Store at exact grid position for flashing
+                self.tierThreePositions[anim.centerIdx] = {
+                    centerX = anim.endX,
+                    centerY = anim.endY,
+                    sprite = anim.sprite,
+                    pattern = anim.pattern
+                }
+                
+                -- Start warden-specific flashing animation (3 flashes over 1 second = 60 frames)
+                print("DEBUG: Starting warden flash animation at " .. anim.endX .. "," .. anim.endY)
+                self.animations[#self.animations + 1] = {
+                    type = "warden_flash",
+                    centerIdx = anim.centerIdx,
+                    centerX = anim.endX,
+                    centerY = anim.endY,
+                    sprite = anim.sprite,
+                    pattern = anim.pattern,
+                    frame = 0,
+                    flashCount = 0  -- Track number of flashes completed
+                }
+                
+                -- Check if this is part of post-attack sequence
+                if self.isPostAttackSequence then
+                    self:continuePostMergeSequence()
+                end
+                
+                -- Don't keep this animation
+            else
+                activeAnimations[#activeAnimations + 1] = anim
+            end
         elseif anim.type == "tier3_flash" then
             anim.frame = anim.frame + 1
             
@@ -2092,21 +2550,67 @@ function Grid:updateAnimations()
             
             -- After 80 frames and 8 flashes (3 visible appearances + final off)
             if anim.frame >= 80 and anim.flashCount >= 8 then
-                -- Create Avatar at tower position (waits for attack mode)
+                print("DEBUG: Avatar flash complete, creating mobile avatar unit")
+                -- Create Avatar at tower position (rallies like warden)
                 local avatarId = #self.avatars + 1
                 self.avatars[avatarId] = {
                     x = anim.centerX,
                     y = anim.centerY,
                     sprite = anim.sprite,
                     hitpoints = AVATAR_HP,
-                    targetX = nil,
-                    targetY = nil,
+                    targetX = 40, -- Rally point (7,2) x coordinate - same as warden  
+                    targetY = 104, -- Rally point (7,2) y coordinate - same as warden
                     attackCooldown = 0,
-                    state = "waiting", -- "waiting", "moving", "attacking"
-                    lastShotTime = 0
+                    state = "rallying", -- "rallying", "combat", "attacking"
+                    lastShotTime = 0,
+                    rallyComplete = false
                 }
+                print("DEBUG: Avatar " .. avatarId .. " created at (" .. anim.centerX .. "," .. anim.centerY .. ") - rallying to (40,104)")
                 
                 -- Despawn the tier 3 bubble - clear from grid and tracking
+                for _, idx in ipairs(anim.pattern) do
+                    self.cells[idx].occupied = false
+                    self.cells[idx].ballType = nil
+                    self.cells[idx].tier = "basic"
+                end
+                self.tierThreePositions[anim.centerIdx] = nil
+                
+                -- Don't keep this animation
+            else
+                activeAnimations[#activeAnimations + 1] = anim
+            end
+        elseif anim.type == "warden_flash" then
+            anim.frame = anim.frame + 1
+            
+            -- Flash every 10 frames (6 times per second) - same as avatar
+            if anim.frame % 10 == 0 then
+                anim.flashCount = anim.flashCount + 1
+            end
+            
+            -- After 80 frames and 8 flashes (3 visible appearances + final off)
+            if anim.frame >= 80 and anim.flashCount >= 8 then
+                print("DEBUG: Warden flash complete, creating mobile warden unit")
+                -- Create mobile Warden unit at tower position
+                local wardenId = #self.wardens + 1
+                self.wardens[wardenId] = {
+                    x = anim.centerX,
+                    y = anim.centerY,
+                    targetX = 40, -- Rally point (7,2) x coordinate  
+                    targetY = 104, -- Rally point (7,2) y coordinate  
+                    sprite = anim.sprite,
+                    hitpoints = math.floor(AVATAR_HP * 0.66), -- 792 HP
+                    maxHitpoints = math.floor(AVATAR_HP * 0.66),
+                    lightningCooldown = 0,
+                    movementSpeed = 0.8, -- Slightly slower than basic troops
+                    state = "rallying", -- "rallying", "combat", "dead"
+                    tier = "warden",
+                    size = 16, -- 16x16 sprite
+                    rallyComplete = false,
+                    currentTarget = nil -- For combat targeting
+                }
+                print("DEBUG: Warden " .. wardenId .. " created at (" .. anim.centerX .. "," .. anim.centerY .. ") - rallying to (40,104)")
+                
+                -- Despawn the tier 3 bubble - clear from grid and tracking (wardens are mobile)
                 for _, idx in ipairs(anim.pattern) do
                     self.cells[idx].occupied = false
                     self.cells[idx].ballType = nil
@@ -2138,6 +2642,12 @@ function Grid:updateAnimations()
             print("DEBUG: Processing pendingContinuePostMerge")
             self.pendingContinuePostMerge = false
             self:continuePostMergeSequence()
+        end
+        
+        -- Check for pending chain merge check (after creating new Tier 2)
+        if self.pendingChainMergeCheck then
+            self.pendingChainMergeCheck = false
+            self:checkMagneticTierThree() -- This checks Tier 2+2 first, then falls back to Tier 1+1
         end
     end
 end
@@ -2447,16 +2957,27 @@ function Grid:checkMagneticTierThree()
         }
     end
     
-    -- Check for valid Tier 3 combinations (Tier 2 + Tier 2 touching)
+    -- Debug: Found " .. #tierTwos .. " Tier 2 bubbles (removed verbose logging)
+    
+    -- Check for valid Tier 2 to Tier 3 combinations (Tier 2 + Tier 2 touching)
     for i = 1, #tierTwos do
         for j = i + 1, #tierTwos do -- Only check each pair once
             local t2a, t2b = tierTwos[i], tierTwos[j]
-            local tier3Sprite = MergeConstants.getTierThreeSprite(t2a.sprite, t2b.sprite)
+            local distance = self:getDistance(t2a.centerX, t2a.centerY, t2b.centerX, t2b.centerY)
             
-            if tier3Sprite then
-                local distance = self:getDistance(t2a.centerX, t2a.centerY, t2b.centerX, t2b.centerY)
-                if distance <= MAGNETIC_TIER2_DISTANCE then -- Tier 2 to Tier 2 magnetic combination range
-                    self:startTierThreeMagnetism(t2a, t2b, tier3Sprite)
+            if distance <= MAGNETIC_TIER2_DISTANCE then -- Tier 2 to Tier 2 magnetic combination range
+                print("DEBUG: Found Tier 2 pair within range - distance: " .. math.floor(distance) .. "px")
+                local tier3Sprite = MergeConstants.getTierThreeSprite(t2a.sprite, t2b.sprite)
+                
+                if tier3Sprite then
+                    -- Create an Avatar (existing 5 combinations)
+                    print("DEBUG: Creating AVATAR from Tier 2 combination (sprites " .. t2a.sprite .. " + " .. t2b.sprite .. ")")
+                    self:startTierThreeMagnetism(t2a, t2b, tier3Sprite, "avatar")
+                    return -- Only one combination at a time
+                else
+                    -- Create a Warden unit (any other Tier 2 combination)
+                    print("DEBUG: Creating WARDEN from Tier 2 combination (sprites " .. t2a.sprite .. " + " .. t2b.sprite .. ")")
+                    self:startTierThreeMagnetism(t2a, t2b, 1, "warden") -- Use sprite 1 for Warden
                     return -- Only one combination at a time
                 end
             end
@@ -2468,7 +2989,7 @@ function Grid:checkMagneticTierThree()
 end
 
 -- Start tier 3 magnetism animation (between two Tier 2 bubbles)
-function Grid:startTierThreeMagnetism(tierTwoA, tierTwoB, sprite)
+function Grid:startTierThreeMagnetism(tierTwoA, tierTwoB, sprite, unitType)
     local midpointX = (tierTwoA.centerX + tierTwoB.centerX) / 2
     local midpointY = (tierTwoA.centerY + tierTwoB.centerY) / 2
     
@@ -2479,6 +3000,7 @@ function Grid:startTierThreeMagnetism(tierTwoA, tierTwoB, sprite)
         endX = midpointX,
         endY = midpointY,
         sprite = sprite,
+        unitType = unitType or "avatar", -- Default to avatar for backward compatibility
         frame = 0
     }
     self.isAnimating = true
@@ -2500,6 +3022,11 @@ function Grid:startTierTwoMagnetism(tierOne1, tierOne2)
         frame = 0
     }
     self.isAnimating = true
+end
+
+-- Schedule a chain merge check for next frame (after animations complete)
+function Grid:scheduleNextMergeCheck()
+    self.pendingChainMergeCheck = true
 end
 
 -- Calculate distance between two points
@@ -2530,33 +3057,71 @@ end
 
 -- Clear tier 1 bubble and its triangle cells
 function Grid:clearTierOne(tierOne)
-    for _, idx in ipairs(tierOne.triangle) do
-        self.cells[idx].ballType = nil
-        self.cells[idx].occupied = false
-        self.cells[idx].tier = nil
+    if not tierOne then
+        print("WARNING: clearTierOne called with nil tierOne")
+        return
     end
-    self.tierOnePositions[tierOne.idx] = nil
+    
+    if tierOne.triangle then
+        for _, idx in ipairs(tierOne.triangle) do
+            if self.cells[idx] then
+                self.cells[idx].ballType = nil
+                self.cells[idx].occupied = false
+                self.cells[idx].tier = nil
+            end
+        end
+    end
+    
+    if tierOne.idx and self.tierOnePositions[tierOne.idx] then
+        self.tierOnePositions[tierOne.idx] = nil
+    end
 end
 
 -- Clear tier 2 bubble and its pattern cells
 function Grid:clearTierTwo(tierTwo)
-    for _, idx in ipairs(tierTwo.pattern) do
-        self.cells[idx].ballType = nil
-        self.cells[idx].occupied = false
-        self.cells[idx].tier = nil
+    if not tierTwo then
+        print("WARNING: clearTierTwo called with nil tierTwo")
+        return
     end
-    self.tierTwoPositions[tierTwo.idx] = nil
+    
+    if tierTwo.pattern then
+        for _, idx in ipairs(tierTwo.pattern) do
+            if self.cells[idx] then
+                self.cells[idx].ballType = nil
+                self.cells[idx].occupied = false
+                self.cells[idx].tier = nil
+            end
+        end
+    end
+    
+    if tierTwo.idx and self.tierTwoPositions[tierTwo.idx] then
+        self.tierTwoPositions[tierTwo.idx] = nil
+    end
 end
 
 -- Clear tier 3 bubble and its pattern cells
 function Grid:clearTierThree(tierThree)
-    for _, idx in ipairs(tierThree.pattern) do
-        self.cells[idx].ballType = nil
-        self.cells[idx].occupied = false
-        self.cells[idx].tier = nil
+    if not tierThree then
+        print("WARNING: clearTierThree called with nil tierThree")
+        return
     end
-    self.tierThreePositions[tierThree.idx] = nil
+    
+    if tierThree.pattern then
+        for _, idx in ipairs(tierThree.pattern) do
+            if self.cells[idx] then
+                self.cells[idx].ballType = nil
+                self.cells[idx].occupied = false
+                self.cells[idx].tier = nil
+            end
+        end
+    end
+    
+    if tierThree.idx and self.tierThreePositions[tierThree.idx] then
+        self.tierThreePositions[tierThree.idx] = nil
+    end
 end
+
+-- Note: clearWarden function removed - Wardens are now mobile units that die in updateWardens()
 
 -- Clear blocking towers when placing new ones (generous placement)
 function Grid:clearBlockingTowers(towerIndices)
@@ -2592,6 +3157,11 @@ function Grid:clearBlockingTowers(towerIndices)
                     end
                 end
             end
+        elseif cell.tier == "warden" then
+            -- Wardens are now mobile units - just clear the cell
+            cell.ballType = nil
+            cell.occupied = false
+            cell.tier = nil
         else
             -- Basic bubble - just clear it
             cell.ballType = nil
@@ -2823,6 +3393,36 @@ function Grid:placeTierThree(centerX, centerY, sprite)
     
 end
 
+-- Place Warden unit (uses troops-tier-two.png sprite, 66% avatar HP, mobile lightning tower)
+function Grid:placeTierThreeWarden(centerX, centerY, sprite)
+    -- Find valid position for full 19-cell pattern (same as avatar)
+    local centerIdx, pattern = self:findValidTierThreePlacement(centerX, centerY)
+    if not centerIdx then 
+        print("WARNING: Could not place Warden unit - finding emergency position")
+        centerIdx, pattern = self:findEmergencyTierThreePlacement(centerX, centerY)
+        if not centerIdx then
+            print("CRITICAL: Could not place Warden unit at all - unit lost")
+            return 
+        end
+    end
+    
+    local gridPos = self.positions[centerIdx]
+    
+    -- Start grid snapping animation (like Tier 3 does)
+    self.animations[#self.animations + 1] = {
+        type = "warden_snap",
+        startX = centerX,           -- midpoint from magnetism
+        startY = centerY,
+        endX = gridPos.x,          -- target grid center
+        endY = gridPos.y,
+        centerIdx = centerIdx,
+        pattern = pattern,          -- store the validated 19-cell pattern
+        sprite = sprite,
+        frame = 0
+    }
+    self.isAnimating = true
+end
+
 -- Emergency placement for Tier 2 - finds ANY available position by clearing everything
 function Grid:findEmergencyTierTwoPlacement(centerX, centerY)
     -- Find ANY valid cell, even if far away
@@ -2960,6 +3560,12 @@ function Grid:clearAnyTowerAtIndex(idx)
                 end
             end
         end
+    elseif cell.tier == "warden" then
+        -- Wardens are now mobile units - just clear the cell
+        cell.ballType = nil
+        cell.occupied = false
+        cell.tier = nil
+        return
     else
         -- Basic bubble - just clear it
         cell.ballType = nil
@@ -3280,6 +3886,67 @@ end
 
 -- Find queue position for creep - simple collision-based spacing
 
+-- Get active spawn buckets based on current level, with probability redistribution
+function Grid:getActiveSpawnBuckets(level)
+    local activeBuckets = {}
+    local bucketsToRemove = MergeConstants.BUCKET_REMOVAL_BY_LEVEL[level] or MergeConstants.BUCKET_REMOVAL_BY_LEVEL[5]
+    
+    -- Create set for fast lookup of buckets to remove
+    local removeSet = {}
+    for _, bucketIndex in ipairs(bucketsToRemove) do
+        removeSet[bucketIndex] = true
+    end
+    
+    -- Filter buckets and build active list
+    for i, bucket in ipairs(MergeConstants.CREEP_SPAWN_BUCKETS) do
+        if not removeSet[i] then
+            activeBuckets[#activeBuckets + 1] = bucket
+        end
+    end
+    
+    -- Calculate redistributed probability ranges
+    local totalBuckets = #activeBuckets
+    if totalBuckets == 0 then return {} end
+    
+    local probabilityPerBucket = 100 / totalBuckets
+    local currentStart = 1
+    
+    for i, bucket in ipairs(activeBuckets) do
+        local rangeStart = math.floor(currentStart)
+        local rangeEnd = math.floor(currentStart + probabilityPerBucket - 0.001)
+        
+        bucket.redistributedRange = {rangeStart, rangeEnd}
+        currentStart = currentStart + probabilityPerBucket
+    end
+    
+    return activeBuckets
+end
+
+-- Get scaled spawn count for levels 6+ (linear scaling)
+function Grid:getScaledSpawnCount(baseCount, level)
+    if level <= 5 then
+        return baseCount
+    end
+    
+    local multiplier = 1.0 + (MergeConstants.LEVEL_6_SCALING_BASE * (level - 5))
+    return math.ceil(baseCount * multiplier)
+end
+
+-- Debug function to test bucket distribution at different levels
+function Grid:debugSpawnBuckets(level)
+    print("=== Debug Spawn Buckets for Level " .. level .. " ===")
+    local activeBuckets = self:getActiveSpawnBuckets(level)
+    
+    print("Active buckets: " .. #activeBuckets)
+    for i, bucket in ipairs(activeBuckets) do
+        local range = bucket.redistributedRange
+        local scaledCount = self:getScaledSpawnCount(bucket.count, level)
+        print("Bucket " .. i .. ": Roll " .. range[1] .. "-" .. range[2] .. 
+              " → " .. scaledCount .. " " .. bucket.tier .. " (base: " .. bucket.count .. ")")
+    end
+    print("=====================================")
+end
+
 function Grid:handleCreepCycle()
     local shotNumber = self.currentShotIndex
     
@@ -3296,6 +3963,10 @@ function Grid:handleCreepCycle()
         return
     end
     
+    -- Get active buckets based on current level
+    local activeBuckets = self:getActiveSpawnBuckets(self.currentLevel)
+    if #activeBuckets == 0 then return end
+    
     -- Random creep spawning based on shot number and dice roll
     local roll = math.random(1, 100)
     
@@ -3307,27 +3978,15 @@ function Grid:handleCreepCycle()
     end
     -- Shot 3+: all rolls are valid (1-100)
     
-    -- Determine spawning based on roll
-    if roll >= 1 and roll <= 10 then
-        self:spawnCreeps(1, "basic", 3)
-    elseif roll >= 11 and roll <= 20 then
-        self:spawnCreeps(2, "basic", 3)
-    elseif roll >= 21 and roll <= 30 then
-        self:spawnCreeps(3, "basic", 3)
-    elseif roll >= 31 and roll <= 40 then
-        self:spawnCreeps(1, "tier1", 4)
-    elseif roll >= 41 and roll <= 50 then
-        self:spawnCreeps(2, "tier1", 4)
-    elseif roll >= 51 and roll <= 60 then
-        self:spawnCreeps(5, "basic", 3)
-    elseif roll >= 61 and roll <= 70 then
-        self:spawnCreeps(8, "basic", 3)
-    elseif roll >= 71 and roll <= 80 then
-        self:spawnCreeps(3, "tier1", 4)
-    elseif roll >= 81 and roll <= 90 then
-        self:spawnCreeps(1, "tier2", 8)
-    elseif roll >= 91 and roll <= 100 then
-        self:spawnCreeps(2, "tier2", 8)
+    -- Find matching bucket based on redistributed ranges
+    for _, bucket in ipairs(activeBuckets) do
+        local range = bucket.redistributedRange
+        if roll >= range[1] and roll <= range[2] then
+            -- Apply level-based scaling to spawn count
+            local scaledCount = self:getScaledSpawnCount(bucket.count, self.currentLevel)
+            self:spawnCreeps(scaledCount, bucket.tier, bucket.size)
+            break
+        end
     end
 end
 
@@ -3634,6 +4293,16 @@ function Grid:findZoneBasedTarget(creep)
             table.insert(zoneTargets[zone], tower)
         end
     end
+    
+    for idx, tower in pairs(self.tierThreePositions) do
+        if tower.hitpoints > 0 then  -- Only consider living towers
+            local zone = self:getTowerZone(tower.centerX)
+            table.insert(zoneTargets[zone], tower)
+        end
+    end
+    
+    -- Note: Mobile Wardens don't participate in zone-based targeting like towers
+    -- Creeps target towers first, then can target mobile units independently
     
     -- If creep has current target in same zone, continue targeting that zone
     local currentZone = nil
@@ -4182,10 +4851,12 @@ function Grid:drawBalls()
         
         -- Only draw if not flashing (flashing is handled in drawAnimations)
         if not isFlashing then
-            self.bubbleSprites.tier3[tierThreeData.sprite]:draw(
+            self.bubbleSprites.tier3[1]:draw(
                 tierThreeData.centerX - 42, tierThreeData.centerY - 42)
         end
     end
+    
+    -- Mobile Warden units are now drawn in drawTroops() function
     
     -- Shooter ball (with flashing for game over)
     local currentShooterBall = self:getCurrentShooterBall()
@@ -4385,6 +5056,146 @@ function Grid:updateTroops()
         end
     end
 end
+
+-- Update mobile Warden units
+function Grid:updateWardens()
+    -- Removed verbose per-frame logging - too noisy
+    
+    for i = #self.wardens, 1, -1 do
+        local warden = self.wardens[i]
+        
+        -- Remove dead wardens
+        if warden.hitpoints <= 0 then
+            print("DEBUG: Removing dead warden " .. i)
+            warden.state = "dead"
+            table.remove(self.wardens, i)
+            goto continue
+        end
+        
+        -- Removed verbose per-frame position logging
+        
+        -- Update lightning cooldown
+        warden.lightningCooldown = warden.lightningCooldown + 1
+        
+        -- State-based behavior
+        if warden.state == "rallying" then
+            self:updateWardenRallying(warden)
+        elseif warden.state == "combat" then
+            self:updateWardenCombat(warden)
+        end
+        
+        -- Fire lightning if cooldown is ready
+        if warden.lightningCooldown >= 60 then -- 1 second cooldown
+            warden.lightningCooldown = 0
+            self:processWardenLightningAttack(warden)
+        end
+        
+        ::continue::
+    end
+end
+
+-- Update Warden during rallying phase (moving to rally point)
+function Grid:updateWardenRallying(warden)
+    local dx = warden.targetX - warden.x
+    local dy = warden.targetY - warden.y
+    local dist = math.sqrt(dx*dx + dy*dy)
+    
+    if dist <= 5 then -- Reached rally point
+        warden.rallyComplete = true
+        -- Switch to combat mode when creeps start marching
+        if self:isCreepMarchActive() then
+            warden.state = "combat"
+            self:assignWardenCombatTarget(warden)
+        end
+    else
+        -- Move toward rally point
+        local newX = warden.x + (dx/dist) * warden.movementSpeed
+        local newY = warden.y + (dy/dist) * warden.movementSpeed
+        local clampedPos = self:clampToValidArea(newX, newY, warden.size)
+        warden.x = clampedPos.x
+        warden.y = clampedPos.y
+    end
+    
+    -- Check if we should switch to combat mode even before reaching rally
+    if self:isCreepMarchActive() and not warden.rallyComplete then
+        warden.state = "combat" 
+        self:assignWardenCombatTarget(warden)
+    end
+end
+
+-- Update Warden during combat phase (moving and attacking like Tier 2 creep)
+function Grid:updateWardenCombat(warden)
+    -- Find and move toward nearest creep
+    self:assignWardenCombatTarget(warden)
+    
+    if warden.currentTarget and warden.currentTarget.hitpoints > 0 then
+        local dx = warden.currentTarget.x - warden.x
+        local dy = warden.currentTarget.y - warden.y
+        local dist = math.sqrt(dx*dx + dy*dy)
+        
+        -- Move toward target (like Tier 2 creep movement)
+        if dist > 15 then -- Maintain 15px minimum distance from target
+            local newX = warden.x + (dx/dist) * warden.movementSpeed
+            local newY = warden.y + (dy/dist) * warden.movementSpeed
+            local clampedPos = self:clampToValidArea(newX, newY, warden.size)
+            warden.x = clampedPos.x
+            warden.y = clampedPos.y
+        end
+    else
+        -- No target or target dead, find new one
+        self:assignWardenCombatTarget(warden)
+    end
+    
+    -- Switch back to rallying if combat ends
+    if not self:isCreepMarchActive() then
+        warden.state = "rallying"
+        warden.currentTarget = nil
+        -- Reset target to rally point
+        warden.targetX = 40 -- Rally point (7,2) 
+        warden.targetY = 104
+    end
+end
+
+-- Assign nearest creep as Warden's combat target
+function Grid:assignWardenCombatTarget(warden)
+    local nearestCreep = nil
+    local nearestDist = math.huge
+    
+    for _, creep in ipairs(self.creeps) do
+        if creep.hitpoints > 0 and not creep.dead then
+            local dist = math.sqrt((creep.x - warden.x)^2 + (creep.y - warden.y)^2)
+            if dist < nearestDist then
+                nearestDist = dist
+                nearestCreep = creep
+            end
+        end
+    end
+    
+    warden.currentTarget = nearestCreep
+end
+
+-- Ensure all Wardens reach rally point before level starts
+function Grid:ensureWardensRallied()
+    for _, warden in ipairs(self.wardens) do
+        if warden.state == "rallying" and not warden.rallyComplete then
+            -- Let Wardens walk to rally point naturally - only teleport if too far
+            local dx = warden.targetX - warden.x
+            local dy = warden.targetY - warden.y
+            local dist = math.sqrt(dx*dx + dy*dy)
+            
+            if dist > 200 then -- Only teleport if extremely far away
+                print("DEBUG: Teleporting Warden to rally point for level start (too far: " .. math.floor(dist) .. "px)")
+                warden.x = warden.targetX
+                warden.y = warden.targetY
+                warden.rallyComplete = true
+            else
+                print("DEBUG: Allowing Warden to walk to rally point (" .. math.floor(dist) .. "px away)")
+                -- Let them walk naturally
+            end
+        end
+    end
+end
+
 -- Find the target for approaching troops (use their assigned rally point)
 function Grid:findTroopClusterCenter(approachingTroop)
     -- Use the approaching troop's assigned rally point
@@ -4593,59 +5404,87 @@ function Grid:updateAvatars()
             goto continue
         end
         
-        -- Only activate during creep march phase
-        if self:isCreepMarchActive() and avatar.state == "waiting" then
-            avatar.state = "moving"
-        end
-        
-        if avatar.state == "moving" or avatar.state == "attacking" then
-            -- Find nearest enemy
-            local nearestCreep = nil
-            local nearestDistance = math.huge
-            
-            for _, creep in ipairs(self.creeps) do
-                local dx = creep.x - avatar.x
-                local dy = creep.y - avatar.y
-                local distance = math.sqrt(dx*dx + dy*dy)
-                
-                if distance < nearestDistance then
-                    nearestDistance = distance
-                    nearestCreep = creep
-                end
-            end
-            
-            -- Move towards nearest enemy or attack if in range
-            if nearestCreep then
-                local dx = nearestCreep.x - avatar.x
-                local dy = nearestCreep.y - avatar.y
-                local distance = math.sqrt(dx*dx + dy*dy)
-                
-                -- Fire tower range is FLAME_TOWER_RANGE (240px)
-                if distance <= FLAME_TOWER_RANGE then
-                    avatar.state = "attacking"
-                    avatar.targetX = nearestCreep.x
-                    avatar.targetY = nearestCreep.y
-                    
-                    -- Fire projectiles like a flame tower
-                    if self.frameCounter - avatar.lastShotTime >= FLAME_TOWER_COOLDOWN then
-                        self:fireAvatarProjectiles(avatar, nearestCreep.x, nearestCreep.y)
-                        avatar.lastShotTime = self.frameCounter
-                    end
-                else
-                    -- Move towards enemy (same speed as troop march)
-                    avatar.state = "moving"
-                    local moveDistance = TROOP_MARCH_SPEED
-                    local moveX = (dx / distance) * moveDistance
-                    local moveY = (dy / distance) * moveDistance
-                    avatar.x = avatar.x + moveX
-                    avatar.y = avatar.y + moveY
-                end
-            end
+        -- State-based behavior similar to wardens
+        if avatar.state == "rallying" then
+            self:updateAvatarRallying(avatar)
+        elseif avatar.state == "combat" then
+            self:updateAvatarCombat(avatar)
         end
         
         ::continue::
     end
 end
+
+-- Update avatar rallying behavior (similar to warden)
+function Grid:updateAvatarRallying(avatar)
+    local dx = avatar.targetX - avatar.x
+    local dy = avatar.targetY - avatar.y
+    local dist = math.sqrt(dx*dx + dy*dy)
+    
+    if dist <= 5 then -- Reached rally point
+        if not avatar.rallyComplete then
+            print("DEBUG: Avatar reached rally point, rally complete")
+        end
+        avatar.rallyComplete = true
+        -- Switch to combat mode when creeps start marching
+        if self:isCreepMarchActive() then
+            print("DEBUG: Avatar switching to combat mode - creeps marching")
+            avatar.state = "combat"
+        end
+    else
+        -- Move toward rally point (same speed as warden)
+        local moveSpeed = TROOP_MARCH_SPEED
+        avatar.x = avatar.x + (dx/dist) * moveSpeed
+        avatar.y = avatar.y + (dy/dist) * moveSpeed
+    end
+end
+
+-- Update avatar combat behavior
+function Grid:updateAvatarCombat(avatar)
+    -- Only activate during creep march phase
+    if not self:isCreepMarchActive() then
+        return
+    end
+        
+    -- Find nearest enemy
+    local nearestCreep = nil
+    local nearestDistance = math.huge
+    
+    for _, creep in ipairs(self.creeps) do
+        local dx = creep.x - avatar.x
+        local dy = creep.y - avatar.y
+        local distance = math.sqrt(dx*dx + dy*dy)
+        
+        if distance < nearestDistance then
+            nearestDistance = distance
+            nearestCreep = creep
+        end
+    end
+    
+    -- Move towards nearest enemy or attack if in range
+    if nearestCreep then
+        local dx = nearestCreep.x - avatar.x
+        local dy = nearestCreep.y - avatar.y
+        local distance = math.sqrt(dx*dx + dy*dy)
+        
+        -- Fire tower range is FLAME_TOWER_RANGE (240px)
+        if distance <= FLAME_TOWER_RANGE then
+            -- Fire projectiles like a flame tower
+            if self.frameCounter - avatar.lastShotTime >= FLAME_TOWER_COOLDOWN then
+                self:fireAvatarProjectiles(avatar, nearestCreep.x, nearestCreep.y)
+                avatar.lastShotTime = self.frameCounter
+            end
+        else
+            -- Move towards enemy (same speed as troop march)
+            local moveDistance = TROOP_MARCH_SPEED
+            local moveX = (dx / distance) * moveDistance
+            local moveY = (dy / distance) * moveDistance
+            avatar.x = avatar.x + moveX
+            avatar.y = avatar.y + moveY
+        end
+    end
+end
+
 
 -- Fire Avatar projectiles (flame tower style)
 function Grid:fireAvatarProjectiles(avatar, targetX, targetY)
@@ -4661,11 +5500,12 @@ function Grid:fireAvatarProjectiles(avatar, targetX, targetY)
         self.projectiles[#self.projectiles + 1] = {
             x = avatar.x,
             y = avatar.y,
-            velocityX = math.cos(angle) * FLAME_PROJECTILE_SPEED,
-            velocityY = math.sin(angle) * FLAME_PROJECTILE_SPEED,
+            vx = math.cos(angle) * FLAME_PROJECTILE_SPEED,
+            vy = math.sin(angle) * FLAME_PROJECTILE_SPEED,
             damage = FLAME_PROJECTILE_DAMAGE,
-            range = FLAME_PROJECTILE_RANGE,
-            distanceTraveled = 0,
+            maxRange = FLAME_PROJECTILE_RANGE,
+            startX = avatar.x,
+            startY = avatar.y,
             towerType = "avatar"
         }
     end
@@ -4847,6 +5687,24 @@ function Grid:updateTowerCombat()
     -- Update attack cooldowns and process attacks for all Tier 1 towers
     for idx, tower in pairs(self.tierOnePositions) do
         if tower.hitpoints > 0 then  -- Only attack if tower is alive
+            -- Continuous rotation: Find target and update rotation every frame
+            local target = self:findNearestCreepInRange(tower.centerX, tower.centerY, TOWER_CONFIGS[tower.ballType].range or 240)
+            if target then
+                -- Update current target
+                tower.currentTarget = target
+                
+                -- Calculate target angle
+                local dx = target.x - tower.centerX
+                local dy = target.y - tower.centerY
+                tower.targetAngle = math.atan2(dy, dx)
+                
+                -- Update rotation based on tower type
+                local rotationSpeed = TOWER_CONFIGS[tower.ballType].rotationSpeed or math.pi / 15
+                self:updateTowerRotation(tower, tower.targetAngle, rotationSpeed)
+            else
+                tower.currentTarget = nil
+            end
+            
             -- Update attack cooldown
             tower.lastAttackTime = tower.lastAttackTime + 1
             
@@ -4892,6 +5750,23 @@ function Grid:updateTowerCombat()
     -- Update attack cooldowns and process attacks for all Tier 2 towers (all lightning)
     for idx, tower in pairs(self.tierTwoPositions) do
         if tower.hitpoints > 0 then  -- Only attack if tower is alive
+            -- Continuous rotation: Find target and update rotation every frame
+            local target = self:findNearestCreepInRange(tower.centerX, tower.centerY, LIGHTNING_BOLT_RANGE)
+            if target then
+                -- Update current target
+                tower.currentTarget = target
+                
+                -- Calculate target angle
+                local dx = target.x - tower.centerX
+                local dy = target.y - tower.centerY
+                tower.targetAngle = math.atan2(dy, dx)
+                
+                -- Update rotation (Lightning towers use Wind rotation speed)
+                self:updateTowerRotation(tower, tower.targetAngle, WIND_ROTATION_SPEED)
+            else
+                tower.currentTarget = nil
+            end
+            
             -- Update attack cooldown
             tower.lastAttackTime = tower.lastAttackTime + 1
             
@@ -4914,6 +5789,96 @@ function Grid:updateTowerCombat()
             
             if shouldFire then
                 self:lightningCreateProjectiles(tower)  -- Use lightning attack system
+            end
+        end
+    end
+    
+    -- Note: Warden lightning attacks are now handled in updateWardens()
+end
+
+-- Process mobile lightning attack for a warden unit
+function Grid:processWardenLightningAttack(warden)
+    -- Find nearest creep within extended lightning range (mobile wardens have longer range)
+    local target = self:findPriorityTargetForLightning(warden.x, warden.y, LIGHTNING_BOLT_RANGE * 1.5)
+    
+    if target then
+        -- Generate jagged lightning path from warden to target
+        local lightningPath = self:generateLightningPath(warden.x, warden.y, target.x, target.y)
+        
+        -- Create instant lightning effect
+        self.lightningEffects[#self.lightningEffects + 1] = {
+            path = lightningPath,
+            lifetime = LIGHTNING_BOLT_LIFETIME,
+            damage = LIGHTNING_BOLT_DAMAGE * 0.8, -- Wardens do 80% of tower lightning damage
+            targetCreep = target,
+            isWardenLightning = true -- Mark as warden lightning for visual distinction
+        }
+        
+        -- Apply damage immediately
+        self:applyLightningDamage(lightningPath, LIGHTNING_BOLT_DAMAGE * 0.8)
+    end
+end
+
+-- Check for immediate Tier 2 to Tier 3 chain merge after a new Tier 2 is created
+function Grid:checkChainMergeForNewTierTwo(newTier2Idx)
+    if self.isAnimating then return end -- Don't chain merge during animations
+    
+    local newTier2 = self.tierTwoPositions[newTier2Idx]
+    if not newTier2 then return end
+    
+    -- Check all other Tier 2 towers for magnetic combinations
+    for idx, otherTier2 in pairs(self.tierTwoPositions) do
+        if idx ~= newTier2Idx then -- Don't check against itself
+            local distance = self:getDistance(newTier2.centerX, newTier2.centerY, otherTier2.centerX, otherTier2.centerY)
+            
+            if distance <= MAGNETIC_TIER2_DISTANCE then
+                local tier3Sprite = MergeConstants.getTierThreeSprite(newTier2.sprite, otherTier2.sprite)
+                
+                if tier3Sprite then
+                    -- Avatar combination found - create immediately
+                    print("DEBUG: Chain merge - creating Avatar from new Tier 2")
+                    self:startTierThreeMagnetism(newTier2, otherTier2, tier3Sprite, "avatar")
+                    return
+                else
+                    -- Warden combination - create immediately  
+                    print("DEBUG: Chain merge - creating Warden from new Tier 2")
+                    self:startTierThreeMagnetism(newTier2, otherTier2, 1, "warden")
+                    return
+                end
+            end
+        end
+    end
+end
+
+-- Check for immediate Tier 2 to Tier 3 chain merge during post-merge sequences (no animation check)
+function Grid:checkImmediateChainMergeForNewTierTwo(newTier2Idx)
+    local newTier2 = self.tierTwoPositions[newTier2Idx]
+    if not newTier2 then return end
+    
+    -- Check all other Tier 2 towers for magnetic combinations
+    for idx, otherTier2 in pairs(self.tierTwoPositions) do
+        if idx ~= newTier2Idx then -- Don't check against itself
+            local distance = self:getDistance(newTier2.centerX, newTier2.centerY, otherTier2.centerX, otherTier2.centerY)
+            
+            if distance <= MAGNETIC_TIER2_DISTANCE then
+                local tier3Sprite = MergeConstants.getTierThreeSprite(newTier2.sprite, otherTier2.sprite)
+                local unitType = tier3Sprite and "avatar" or "warden"
+                local sprite = tier3Sprite or 1
+                
+                print("DEBUG: Chain merge - found T2+T2 merge: " .. newTier2.sprite .. " + " .. otherTier2.sprite .. " → " .. unitType)
+                
+                -- Create immediate merge entry for processing
+                local chainMerge = {
+                    type = "tier2",
+                    t2a = {idx = newTier2Idx, centerX = newTier2.centerX, centerY = newTier2.centerY, sprite = newTier2.sprite},
+                    t2b = {idx = idx, centerX = otherTier2.centerX, centerY = otherTier2.centerY, sprite = otherTier2.sprite},
+                    unitType = unitType,
+                    sprite = sprite
+                }
+                
+                -- Process the chain merge immediately
+                self:processImediateTier2Merge(chainMerge)
+                return
             end
         end
     end
@@ -5054,20 +6019,10 @@ function Grid:flameCreateProjectiles(tower)
     -- Only flame towers use this system
     if tower.ballType ~= 1 then return end
     
-    -- Find nearest creep within range (always check for new targets)
-    local target = self:findNearestCreepInRange(tower.centerX, tower.centerY, FLAME_TOWER_RANGE)
-    if not target then 
-        tower.currentTarget = nil
-        return 
-    end
-    
-    -- Always update to newest target (rotation speed will limit switching)
-    if tower.currentTarget ~= target then
-        tower.currentTarget = target
-        -- Calculate new target angle
-        local dx = target.x - tower.centerX
-        local dy = target.y - tower.centerY
-        tower.targetAngle = math.atan2(dy, dx)
+    -- Use current target (rotation and targeting now handled continuously in main loop)
+    local target = tower.currentTarget
+    if not target or target.hitpoints <= 0 then 
+        return  -- No valid target
     end
     
     -- Calculate distance to target using shared helper
@@ -5077,9 +6032,6 @@ function Grid:flameCreateProjectiles(tower)
     if not self:isTargetInFiringRange(distToTarget, FLAME_PROJECTILE_RANGE) then
         return  -- Don't fire if creep is too far away
     end
-    
-    -- Update tower rotation using shared helper
-    self:updateTowerRotation(tower, tower.targetAngle, FLAME_ROTATION_SPEED)
     
     -- Fire continuously while creep is in range (even while adjusting aim)
     
@@ -5145,20 +6097,10 @@ function Grid:tremorCreateProjectiles(tower)
     -- Only tremor towers use this system
     if tower.ballType ~= 3 then return end
     
-    -- Find nearest creep within range (always check for new targets)
-    local target = self:findNearestCreepInRange(tower.centerX, tower.centerY, TREMOR_TOWER_RANGE)
-    if not target then 
-        tower.currentTarget = nil
-        return 
-    end
-    
-    -- Always update to newest target (rotation speed will limit switching)
-    if tower.currentTarget ~= target then
-        tower.currentTarget = target
-        -- Calculate new target angle
-        local dx = target.x - tower.centerX
-        local dy = target.y - tower.centerY
-        tower.targetAngle = math.atan2(dy, dx)
+    -- Use current target (rotation and targeting now handled continuously in main loop)
+    local target = tower.currentTarget
+    if not target or target.hitpoints <= 0 then 
+        return  -- No valid target
     end
     
     -- Calculate distance to target using shared helper
@@ -5168,9 +6110,6 @@ function Grid:tremorCreateProjectiles(tower)
     if not self:isTargetInFiringRange(distToTarget, TREMOR_PROJECTILE_RANGE) then
         return  -- Don't fire if creep is too far away
     end
-    
-    -- Update tower rotation using shared helper
-    self:updateTowerRotation(tower, tower.targetAngle, TREMOR_ROTATION_SPEED)
     
     -- Create 15 projectiles in precise arc pattern
     local arcRadians = math.rad(TREMOR_ARC_ANGLE)  -- Convert 45° to radians
@@ -5213,21 +6152,10 @@ function Grid:windCreateProjectiles(tower)
     
     -- Check if we should start a new burst
     if not tower.burstActive then
-        -- Find nearest creep within range to start burst
-        local target = self:findNearestCreepInRange(tower.centerX, tower.centerY, WIND_TOWER_RANGE)
-        
-        if not target then 
-            tower.currentTarget = nil
-            return  -- Don't fire if no target in range
-        end
-        
-        -- Always update to newest target
-        if tower.currentTarget ~= target then
-            tower.currentTarget = target
-            -- Calculate new target angle
-            local dx = target.x - tower.centerX
-            local dy = target.y - tower.centerY
-            tower.targetAngle = math.atan2(dy, dx)
+        -- Use current target (rotation and targeting now handled continuously in main loop)
+        local target = tower.currentTarget
+        if not target or target.hitpoints <= 0 then 
+            return  -- No valid target
         end
         
         -- Calculate distance to target using shared helper
@@ -5237,9 +6165,6 @@ function Grid:windCreateProjectiles(tower)
         if not self:isTargetInFiringRange(distToTarget, WIND_PROJECTILE_RANGE) then
             return  -- Don't fire if creep is too far away
         end
-        
-        -- Update tower rotation using shared helper
-        self:updateTowerRotation(tower, tower.targetAngle, WIND_ROTATION_SPEED)
         
         -- Start new burst
         tower.burstActive = true
@@ -5305,27 +6230,13 @@ function Grid:lightningCreateProjectiles(tower)
     
     -- Check if we should start a new lightning sequence
     if not tower.lightningSequenceActive then
-        -- FIXED: Find priority target within actual bolt range to avoid targeting out-of-range enemies
-        local target = self:findPriorityTargetForLightning(tower.centerX, tower.centerY, LIGHTNING_BOLT_RANGE)
-        
-        if not target then 
-            tower.currentTarget = nil
-            return  -- Don't fire if no target in range
+        -- Use current target (rotation and targeting now handled continuously in main loop)
+        local target = tower.currentTarget
+        if not target or target.hitpoints <= 0 then 
+            return  -- No valid target
         end
         
-        -- Always update to newest target
-        if tower.currentTarget ~= target then
-            tower.currentTarget = target
-            -- Calculate new target angle
-            local dx = target.x - tower.centerX
-            local dy = target.y - tower.centerY
-            tower.targetAngle = math.atan2(dy, dx)
-        end
-        
-        -- Note: No additional range check needed since we already found target within bolt range
-        
-        -- Update tower rotation using shared helper
-        self:updateTowerRotation(tower, tower.targetAngle, WIND_ROTATION_SPEED)
+        -- Note: No additional range check needed since continuous targeting already validates range
         
         -- Start new lightning sequence
         tower.lightningSequenceActive = true
@@ -5341,6 +6252,15 @@ function Grid:lightningCreateProjectiles(tower)
         -- Fire bolts at intervals during sequence (frames 1 and 5, 4 frames apart)
         local boltFrame = tower.lightningSequenceProgress
         if (boltFrame == 1 or boltFrame == 5) and tower.lightningBoltsFired < LIGHTNING_BOLTS_PER_SEQUENCE then
+            -- Validate target still exists before firing
+            if not tower.currentTarget or tower.currentTarget.hitpoints <= 0 then
+                -- Target died during sequence, abort and reset
+                tower.lightningSequenceActive = false
+                tower.lightningSequenceProgress = 0
+                tower.lightningBoltsFired = 0
+                return
+            end
+            
             tower.lightningBoltsFired = tower.lightningBoltsFired + 1
             
             -- Generate new jagged path for this bolt
@@ -5794,6 +6714,15 @@ function Grid:checkForDefeat()
     end
     
     if not hasTowers then
+        for _, warden in ipairs(self.wardens) do
+            if warden.hitpoints > 0 then
+                hasTowers = true
+                break
+            end
+        end
+    end
+    
+    if not hasTowers then
         -- All towers destroyed - creeps won this round, advance to next level
         if self.currentLevel == 5 then
             -- Final level - game over (creeps completely won)
@@ -5924,8 +6853,8 @@ function Grid:updateRainDots()
             local distSquared = dx*dx + dy*dy
             local creepSizeSquared = creep.size * creep.size
             
-            -- Check if creep is touching the dot (using squared distance comparison)
-            if distSquared <= creepSizeSquared then
+            -- Enhanced collision: 3x larger hit radius (9x area) for improved effectiveness
+            if distSquared <= (creepSizeSquared * 9) then
                 -- Deal damage to creep
                 creep.hitpoints = creep.hitpoints - dot.damage
                 
@@ -6196,6 +7125,34 @@ function Grid:checkCreepProjectileTowerCollision(projectile, projectileIndex)
             return  -- Projectile hit something, stop processing
         end
     end
+    
+    -- Check mobile Warden units for collision  
+    for wardenIndex, warden in ipairs(self.wardens) do
+        if warden.hitpoints > 0 then  -- Only check living wardens
+            -- Calculate distance between projectile and warden center
+            local dx = projectile.x - warden.x
+            local dy = projectile.y - warden.y
+            local distance = math.sqrt(dx*dx + dy*dy)
+            
+            -- Use warden size for collision radius
+            local wardenRadius = warden.size / 2
+            
+            -- Check if projectile hits the warden
+            if distance <= wardenRadius then
+                -- Apply damage to warden
+                warden.hitpoints = warden.hitpoints - projectile.damage
+                
+                -- Remove the projectile
+                if projectileIndex <= #self.projectiles then
+                    table.remove(self.projectiles, projectileIndex)
+                end
+                
+                -- Warden death is handled in updateWardens()
+                
+                return  -- Projectile hit something, stop processing
+            end
+        end
+    end
 end
 
 -- Check if all towers are destroyed (game over condition)
@@ -6216,7 +7173,7 @@ function Grid:checkForGameOver()
     end
 end
 
--- Draw HP bar above a tower
+-- Draw HP bar above a tower (or below if on row 1)
 function Grid:drawTowerHPBar(tower)
     -- Only draw HP bar if tower is damaged
     if tower.hitpoints >= tower.maxHitpoints then return end
@@ -6224,7 +7181,14 @@ function Grid:drawTowerHPBar(tower)
     local barWidth = 20
     local barHeight = 3
     local barX = tower.centerX - barWidth/2
-    local barY = tower.centerY - 25  -- Above the tower sprite
+    
+    -- Check if tower is on row 1 (centerY = 8) and position bar below instead of above
+    local barY
+    if tower.centerY <= 8 then
+        barY = tower.centerY + 25  -- Below the tower sprite for row 1
+    else
+        barY = tower.centerY - 25  -- Above the tower sprite for other rows
+    end
     
     -- Calculate HP percentage
     local hpPercent = tower.hitpoints / tower.maxHitpoints
@@ -6261,13 +7225,43 @@ function Grid:drawTroops()
         
         sprite:draw(troop.x - offset, troop.y - offset)
     end
+    
+    -- Draw mobile Warden units
+    for _, warden in ipairs(self.wardens) do
+        if warden.hitpoints > 0 then
+            local offset = warden.size / 2
+            self.bubbleSprites.troops.tier2:draw(warden.x - offset, warden.y - offset)
+            
+            -- Draw health bar if damaged and in combat
+            if warden.hitpoints < warden.maxHitpoints and self:isCreepMarchActive() then
+                self:drawWardenHPBar(warden)
+            end
+        end
+    end
+end
+
+-- Draw health bar for Warden
+function Grid:drawWardenHPBar(warden)
+    local barWidth = 20
+    local barHeight = 3
+    local barX = warden.x - barWidth / 2
+    local barY = warden.y - warden.size / 2 - 8
+    
+    -- Background
+    gfx.setColor(gfx.kColorBlack)
+    gfx.fillRect(barX, barY, barWidth, barHeight)
+    
+    -- Health bar
+    local healthPercent = warden.hitpoints / warden.maxHitpoints
+    gfx.setColor(gfx.kColorWhite)
+    gfx.fillRect(barX + 1, barY + 1, (barWidth - 2) * healthPercent, barHeight - 2)
 end
 
 -- Draw all Avatars
 function Grid:drawAvatars()
     for _, avatar in ipairs(self.avatars) do
-        -- Draw Avatar using tier 3 sprite (since that's where it came from)
-        self.bubbleSprites.tier3[avatar.sprite]:draw(avatar.x - 42, avatar.y - 42)
+        -- Draw Avatar using troops tier 3 sprite (from troops-tier-three.png)
+        self.bubbleSprites.troops.tier3:draw(avatar.x - 42, avatar.y - 42)
         
         -- Draw health bar if in combat
         if self:isCreepMarchActive() and avatar.hitpoints < AVATAR_HP then
@@ -6409,12 +7403,26 @@ function Grid:drawAnimations()
             -- Draw tier 3 bubble moving from midpoint to grid center
             local currentX = anim.startX + (anim.endX - anim.startX) * progress
             local currentY = anim.startY + (anim.endY - anim.startY) * progress
-            self.bubbleSprites.tier3[anim.sprite]:draw(currentX - 42, currentY - 42)
+            self.bubbleSprites.tier3[1]:draw(currentX - 42, currentY - 42)
+        elseif anim.type == "warden_snap" then
+            local progress = math.min(anim.frame / MERGE_ANIMATION_FRAMES, 1.0)
+            
+            -- Draw warden unit moving from midpoint to grid center
+            local currentX = anim.startX + (anim.endX - anim.startX) * progress
+            local currentY = anim.startY + (anim.endY - anim.startY) * progress
+            self.bubbleSprites.troops.tier2:draw(currentX - 8, currentY - 8) -- 16/2 = 8 for centering
         elseif anim.type == "tier3_flash" then
             -- Flash on/off every 10 frames (visible on frames 0-9, 20-29, 40-49)
             local flashCycle = math.floor(anim.frame / 10) % 2
             if flashCycle == 0 then  -- Show on even cycles (0, 2, 4)
-                self.bubbleSprites.tier3[anim.sprite]:draw(anim.centerX - 42, anim.centerY - 42)
+                self.bubbleSprites.tier3[1]:draw(anim.centerX - 42, anim.centerY - 42)
+            end
+            -- Don't draw on odd cycles (1, 3, 5) to create flashing effect
+        elseif anim.type == "warden_flash" then
+            -- Flash on/off every 10 frames (same pattern as tier3_flash)
+            local flashCycle = math.floor(anim.frame / 10) % 2
+            if flashCycle == 0 then  -- Show on even cycles (0, 2, 4)
+                self.bubbleSprites.tier3[1]:draw(anim.centerX - 42, anim.centerY - 42)
             end
             -- Don't draw on odd cycles (1, 3, 5) to create flashing effect
         elseif anim.type == "tower_compacting" then
@@ -6433,6 +7441,8 @@ function Grid:drawAnimations()
                     self.bubbleSprites.tier2[tower.data.sprite]:draw(currentX - 26, currentY - 26)
                 elseif tower.type == "tier3" then
                     self.bubbleSprites.tier3[tower.data.sprite]:draw(currentX - 42, currentY - 42)
+                elseif tower.type == "warden" then
+                    self.bubbleSprites.troops.tier2:draw(currentX - 8, currentY - 8) -- 16/2 = 8 for centering
                 end
             end
         end

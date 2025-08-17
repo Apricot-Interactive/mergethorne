@@ -132,4 +132,30 @@ function MergeConstants.getSpriteOffset(tier)
     return info and info.offset or -10
 end
 
+-- Creep spawning system constants
+MergeConstants.CREEP_SPAWN_BUCKETS = {
+    {range = {1, 10}, count = 1, tier = "basic", size = 3},
+    {range = {11, 20}, count = 2, tier = "basic", size = 3},
+    {range = {21, 30}, count = 1, tier = "tier1", size = 4},
+    {range = {31, 40}, count = 4, tier = "basic", size = 3},
+    {range = {41, 50}, count = 2, tier = "tier1", size = 4},
+    {range = {51, 60}, count = 1, tier = "tier2", size = 8},
+    {range = {61, 70}, count = 6, tier = "basic", size = 3},
+    {range = {71, 80}, count = 3, tier = "tier1", size = 4},
+    {range = {81, 90}, count = 12, tier = "basic", size = 3},
+    {range = {91, 100}, count = 3, tier = "tier2", size = 8}
+}
+
+-- Level-based bucket removal: buckets to remove at each level
+MergeConstants.BUCKET_REMOVAL_BY_LEVEL = {
+    [1] = {}, -- Remove no buckets at level 1
+    [2] = {1, 2}, -- Remove buckets 1-2 at level 2
+    [3] = {1, 2, 3}, -- Remove buckets 1-3 at level 3
+    [4] = {1, 2, 3, 4}, -- Remove buckets 1-4 at level 4
+    [5] = {1, 2, 3, 4, 5} -- Remove buckets 1-5 at level 5+
+}
+
+-- Linear scaling factor for levels 6+
+MergeConstants.LEVEL_6_SCALING_BASE = 0.25
+
 return MergeConstants
