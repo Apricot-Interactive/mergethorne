@@ -87,7 +87,7 @@ local GAME_OVER_FLASHES <const> = 3
 -- ============================================================================
 -- Tower spacing and boundary calculations for end-of-level compacting
 
-local TOWER_SPACING_BUFFER <const> = 10        -- Minimum px between tower edges during compacting
+local TOWER_SPACING_BUFFER <const> = 2         -- Minimum px between tower edges during compacting
 local CUTOUT_CLEARANCE_BASE <const> = 80       -- Base clearance for cutout boundary area
 local CUTOUT_SAFETY_BUFFER <const> = 10        -- Additional safety buffer for cutout boundary
 local BASIC_BOUNDARY_BUFFER <const> = 5        -- Safety buffer from left screen edge
@@ -578,6 +578,7 @@ function Grid:setupGameState()
     self.animations = {}
     self.isAnimating = false
     self.pendingPostCompactMergeCheck = false
+    self.pendingContinuePostMerge = false
     self.gameOverFlashCount = 0
     self.flashTimer = 0
     
@@ -752,6 +753,7 @@ end
 
 -- Initialize starting grid with pre-placed bubbles that respects preserved towers
 function Grid:setupStartingBallsWithTowerPreservation()
+    print("DEBUG: Setting up basic bubbles for level " .. self.currentLevel)
     -- Randomly assign bubble types to letters A, B, C, D, E (types 1-5)
     local letterTypes = {}
     local availableTypes = {1, 2, 3, 4, 5}
@@ -817,6 +819,7 @@ function Grid:setupStartingBallsWithTowerPreservation()
             end
         end
     end
+    print("DEBUG: Basic bubble setup complete for level " .. self.currentLevel)
 end
 
 -- DUPLICATE FUNCTION REMOVED
@@ -848,6 +851,7 @@ end
 
 -- Advance to next level with tower preservation and grid overlay
 function Grid:advanceToNextLevel()
+    print("DEBUG: advanceToNextLevel() called - advancing from level " .. self.currentLevel .. " to " .. (self.currentLevel + 1))
     self.currentLevel = self.currentLevel + 1
     
     -- Add 15 shots to the counter
@@ -857,6 +861,7 @@ function Grid:advanceToNextLevel()
     -- Note: currentShotIndex stays the same to continue from current position
     
     -- NEW: Start the post-attack compacting sequence instead of immediate preservation
+    print("DEBUG: Starting post-attack sequence for level " .. self.currentLevel)
     self:startPostAttackSequence()
 end
 
@@ -866,14 +871,19 @@ end
 -- or other towers, settle into position, then check for merges recursively
 -- @return void - Continues asynchronously through animation system
 function Grid:startPostAttackSequence()
+    print("DEBUG: startPostAttackSequence() called for level " .. self.currentLevel)
     -- Set flag to indicate we're in post-attack sequence
+    print("DEBUG: Setting isPostAttackSequence = true")
     self.isPostAttackSequence = true
     
     -- Store living towers for compacting
     local livingTowers = self:collectLivingTowers()
+    print("DEBUG: Found " .. #livingTowers .. " living towers to compact")
     
     if #livingTowers == 0 then
         -- No towers to compact, proceed directly to level setup
+        print("DEBUG: No towers to compact, proceeding directly to finishLevelAdvancement()")
+        print("DEBUG: Setting isPostAttackSequence = false")
         self.isPostAttackSequence = false -- Clear the flag
         self:finishLevelAdvancement()
         return
@@ -938,8 +948,11 @@ end
 -- @param towers table - Array of tower objects from collectLivingTowers()
 -- @return void - Sets up animations that complete asynchronously
 function Grid:startTowerCompacting(towers)
-    if self.isAnimating then return end
-    
+    print("DEBUG: startTowerCompacting() called with " .. #towers .. " towers")
+    if self.isAnimating then 
+        print("DEBUG: Still animating, deferring tower compacting")
+        return 
+    end
     
     -- Sort towers by X position (leftmost first) to compact from left to right
     table.sort(towers, function(a, b) return a.centerX < b.centerX end)
@@ -972,9 +985,12 @@ function Grid:startTowerCompacting(towers)
             towers = compactingTowers,
             frame = 0
         }
+        print("DEBUG: Starting tower compacting animations for " .. #compactingTowers .. " towers")
         self.isAnimating = true
     else
         -- No compacting needed, finish the post-attack sequence
+        print("DEBUG: No compacting needed, finishing post-attack sequence immediately")
+        print("DEBUG: Setting isPostAttackSequence = false")
         self.isPostAttackSequence = false
         self:finishLevelAdvancement()
     end
@@ -1174,11 +1190,11 @@ end
 -- Get tower radius for collision detection
 function Grid:getTowerRadius(towerType)
     if towerType == "tier1" then
-        return 18 -- 36px / 2
+        return 16 -- Slightly less than 36px/2 for tighter packing
     elseif towerType == "tier2" then
-        return 26 -- 52px / 2  
+        return 24 -- Slightly less than 52px/2 for tighter packing
     elseif towerType == "tier3" then
-        return 42 -- 84px / 2
+        return 40 -- Slightly less than 84px/2 for tighter packing
     end
     return 10 -- fallback
 end
@@ -1197,6 +1213,7 @@ function Grid:checkPostCompactMerges()
     if self.currentLevel > 1 then
         local tier1Merge = self:findPostCompactTier1Merge()
         if tier1Merge then
+            print("DEBUG: Found Tier 1 merge, starting magnetism")
             self:startTierTwoMagnetism(tier1Merge.t1, tier1Merge.t2)
             return -- Process one merge at a time
         end
@@ -1206,6 +1223,7 @@ function Grid:checkPostCompactMerges()
     if self.currentLevel > 2 then
         local tier2Merge = self:findPostCompactTier2Merge()
         if tier2Merge then
+            print("DEBUG: Found Tier 2 merge, starting magnetism")
             self:startTierThreeMagnetism(tier2Merge.t2a, tier2Merge.t2b, tier2Merge.sprite)
             return -- Process one merge at a time
         end
@@ -1216,6 +1234,7 @@ function Grid:checkPostCompactMerges()
         self:startTowerCompacting(livingTowers)
     else
         -- No towers left, finish level advancement
+        print("DEBUG: Finishing level advancement")
         self.isPostAttackSequence = false -- Clear the flag
         self:finishLevelAdvancement()
     end
@@ -1287,14 +1306,27 @@ end
 
 -- Override the normal magnetic checking after merges to continue compacting sequence
 function Grid:continuePostMergeSequence()
+    print("DEBUG: continuePostMergeSequence() called")
+    
+    -- If still animating, defer this call until animations complete
+    if self.isAnimating then
+        print("DEBUG: Still animating, setting flag to continue post-merge sequence when ready")
+        self.pendingContinuePostMerge = true
+        return
+    end
+    
     -- After a merge completes, restart the compacting sequence
     local livingTowers = self:collectLivingTowers()
+    print("DEBUG: Found " .. #livingTowers .. " living towers after merge")
     
     if #livingTowers > 0 then
         -- Compact again after the merge
+        print("DEBUG: Restarting tower compacting after merge")
         self:startTowerCompacting(livingTowers)
     else
         -- No towers left, finish level advancement
+        print("DEBUG: No towers left after merge, finishing level advancement")
+        print("DEBUG: Setting isPostAttackSequence = false")
         self.isPostAttackSequence = false -- Clear the flag
         self:finishLevelAdvancement()
     end
@@ -1302,6 +1334,7 @@ end
 
 -- Original level advancement logic, now called after compacting sequence completes
 function Grid:finishLevelAdvancement()
+    print("DEBUG: finishLevelAdvancement() called for level " .. self.currentLevel)
     -- Store current tower positions for preservation
     local preservedTierOnePositions = {}
     local preservedTierTwoPositions = {}
@@ -1323,6 +1356,13 @@ function Grid:finishLevelAdvancement()
             preservedTierThreePositions[idx] = tower
         end
     end
+    
+    -- Count preserved towers
+    local t1Count, t2Count, t3Count = 0, 0, 0
+    for _ in pairs(preservedTierOnePositions) do t1Count = t1Count + 1 end
+    for _ in pairs(preservedTierTwoPositions) do t2Count = t2Count + 1 end
+    for _ in pairs(preservedTierThreePositions) do t3Count = t3Count + 1 end
+    print("DEBUG: Preserved " .. t1Count .. " T1, " .. t2Count .. " T2, " .. t3Count .. " T3 towers")
     
     -- Clear existing grid (except permanent boundaries and preserved towers)
     for idx, cell in pairs(self.cells) do
@@ -1392,7 +1432,9 @@ function Grid:finishLevelAdvancement()
     self.troopMarchActive = false
     
     -- Setup new starting grid that respects preserved towers
+    print("DEBUG: Calling setupStartingBallsWithTowerPreservation() for level " .. self.currentLevel)
     self:setupStartingBallsWithTowerPreservation()
+    print("DEBUG: finishLevelAdvancement() complete for level " .. self.currentLevel)
 end
 
 -- Check for victory condition or level advancement after all creeps defeated
@@ -1422,17 +1464,21 @@ function Grid:checkForVictory()
         if shouldAdvance then
             if self.currentLevel == 5 then
                 -- Final victory on level 5
+                print("DEBUG: Victory on level 5 - setting gameState to victory")
                 self.gameState = "victory"
             elseif self.currentLevel == 1 then
                 -- Level 1 completed - unlock Tier 2 towers
+                print("DEBUG: Level 1 completed - setting gameState to tier2_unlock")
                 self.gameState = "tier2_unlock"
-                -- Also advance to next level (will happen after unlock screen)
+                -- NOTE: Level advancement deferred until unlock screen confirmation
             elseif self.currentLevel == 2 then
                 -- Level 2 completed - unlock Tier 3 towers
+                print("DEBUG: Level 2 completed - setting gameState to tier3_unlock")
                 self.gameState = "tier3_unlock"
-                -- Also advance to next level (will happen after unlock screen)
+                -- NOTE: Level advancement deferred until unlock screen confirmation
             else
                 -- Regular level advancement (levels 3-4)
+                print("DEBUG: Regular level advancement for level " .. self.currentLevel)
                 self:advanceToNextLevel()
             end
         end
@@ -1464,7 +1510,9 @@ function Grid:handleInput()
     elseif self.gameState == "tier2_unlock" or self.gameState == "tier3_unlock" then
         if pd.buttonJustPressed(pd.kButtonA) then
             -- Continue to next level after unlock message
+            print("DEBUG: A pressed during unlock screen, calling advanceToNextLevel()")
             self:advanceToNextLevel()
+            print("DEBUG: Setting gameState to playing after unlock")
             self.gameState = "playing"
         end
         return
@@ -1546,6 +1594,13 @@ function Grid:update()
     
     -- Increment global frame counter for knockback cooldown tracking
     self.frameCounter = self.frameCounter + 1
+    
+    -- DEBUG: Periodic status updates (reduced frequency)
+    self.debugFrameCounter = (self.debugFrameCounter or 0) + 1
+    if self.debugFrameCounter % 300 == 0 then  -- Every 5 seconds instead of 2
+        print("DEBUG: Level " .. self.currentLevel .. ", Shot " .. self.currentShotIndex .. "/" .. #self.ammo .. 
+              ", Creeps: " .. #self.creeps .. ", gameState: " .. self.gameState)
+    end
     
     self:updateAnimations()
     self:updateCreeps()
@@ -1970,6 +2025,7 @@ function Grid:updateAnimations()
                     end
                 end
                 -- Set flag to check merges on next frame (after isAnimating is cleared)
+                print("DEBUG: Tower compacting animation completed, setting pendingPostCompactMergeCheck = true")
                 self.pendingPostCompactMergeCheck = true
                 -- Don't keep this animation
             else
@@ -2072,8 +2128,16 @@ function Grid:updateAnimations()
         
         -- Check for pending post-compact merge check
         if self.pendingPostCompactMergeCheck then
+            print("DEBUG: Processing pendingPostCompactMergeCheck")
             self.pendingPostCompactMergeCheck = false
             self:checkPostCompactMerges()
+        end
+        
+        -- Check for pending continue post-merge sequence
+        if self.pendingContinuePostMerge then
+            print("DEBUG: Processing pendingContinuePostMerge")
+            self.pendingContinuePostMerge = false
+            self:continuePostMergeSequence()
         end
     end
 end
@@ -2112,10 +2176,10 @@ function Grid:startTierOnePlacement(triangle, ballType, mergeX, mergeY)
     self.isAnimating = true
 end
 
--- Find best triangle for tier 1 placement (expanded search approach)
+-- Find best triangle for tier 1 placement (generous approach)
 function Grid:findBestTriangleForTierOne(centerX, centerY)
-    -- Find multiple candidate cells near the merge center
-    local candidates = self:findNearestValidCells(centerX, centerY, 5)
+    -- Find multiple candidate cells near the merge center - much wider search
+    local candidates = self:findNearestValidCells(centerX, centerY, 15)
     if #candidates == 0 then return nil end
     
     -- Collect all valid triangles from all candidates
@@ -2138,13 +2202,19 @@ function Grid:findBestTriangleForTierOne(centerX, centerY)
                 {angle = 300, triangle = {candidateIdx, neighbors[4], neighbors[6]}}  -- 300° down-right
             }
             
-            -- Test each pie slice for validity
+            -- Test each pie slice for validity (GENEROUS: allow stomping basic bubbles)
             for _, slice in ipairs(pieSlices) do
                 local isValid = true
+                local blockingTowers = {}
+                
                 for _, idx in ipairs(slice.triangle) do
                     if not self.positions[idx] or self.cells[idx].permanent then
                         isValid = false
                         break
+                    end
+                    -- Check for blocking towers (Tier 1+)
+                    if self.cells[idx].occupied and (self.cells[idx].tier == "tier1" or self.cells[idx].tier == "tier2" or self.cells[idx].tier == "tier3") then
+                        blockingTowers[#blockingTowers + 1] = idx
                     end
                 end
                 
@@ -2155,25 +2225,42 @@ function Grid:findBestTriangleForTierOne(centerX, centerY)
                     local dy = centerY - triangleCenter.y
                     local dist = dx * dx + dy * dy
                     
+                    -- Penalty for displacing existing towers (prefer clean placement)
+                    local penalty = 0
+                    for _, blockingIdx in ipairs(blockingTowers) do
+                        if self.cells[blockingIdx].tier == "tier3" then
+                            penalty = penalty + 4000  -- Heavy penalty for Tier 3
+                        elseif self.cells[blockingIdx].tier == "tier2" then
+                            penalty = penalty + 2000  -- Medium penalty for Tier 2
+                        elseif self.cells[blockingIdx].tier == "tier1" then
+                            penalty = penalty + 800   -- Light penalty for same-tier
+                        end
+                    end
+                    
                     allValidTriangles[#allValidTriangles + 1] = {
                         triangle = slice.triangle,
                         center = triangleCenter,
-                        dist = dist,
-                        candidateIdx = candidateIdx
+                        dist = dist + penalty,
+                        candidateIdx = candidateIdx,
+                        blockingTowers = blockingTowers
                     }
                 end
             end
         end
     end
     
-    -- Choose triangle with center closest to merge center
+    -- Choose triangle with center closest to merge center (with penalties)
     local bestTriangle = nil
     if #allValidTriangles > 0 then
         table.sort(allValidTriangles, function(a, b) return a.dist < b.dist end)
         bestTriangle = allValidTriangles[1].triangle
+        
+        -- Clear any blocking towers before placement
+        local bestOption = allValidTriangles[1]
+        if #bestOption.blockingTowers > 0 then
+            self:clearBlockingTowers(bestOption.blockingTowers)
+        end
     end
-    
-    -- Removed debug output for cleaner console
     
     return bestTriangle
 end
@@ -2461,9 +2548,64 @@ function Grid:clearTierTwo(tierTwo)
     self.tierTwoPositions[tierTwo.idx] = nil
 end
 
--- Find valid Tier 2 placement near given position
+-- Clear tier 3 bubble and its pattern cells
+function Grid:clearTierThree(tierThree)
+    for _, idx in ipairs(tierThree.pattern) do
+        self.cells[idx].ballType = nil
+        self.cells[idx].occupied = false
+        self.cells[idx].tier = nil
+    end
+    self.tierThreePositions[tierThree.idx] = nil
+end
+
+-- Clear blocking towers when placing new ones (generous placement)
+function Grid:clearBlockingTowers(towerIndices)
+    for _, idx in ipairs(towerIndices) do
+        local cell = self.cells[idx]
+        if cell.tier == "tier1" then
+            -- Find and remove from tierOnePositions
+            for tier1Idx, tier1 in pairs(self.tierOnePositions) do
+                for _, triangleIdx in ipairs(tier1.triangle) do
+                    if triangleIdx == idx then
+                        self:clearTierOne(tier1)
+                        break
+                    end
+                end
+            end
+        elseif cell.tier == "tier2" then
+            -- Find and remove from tierTwoPositions
+            for tier2Idx, tier2 in pairs(self.tierTwoPositions) do
+                for _, patternIdx in ipairs(tier2.pattern) do
+                    if patternIdx == idx then
+                        self:clearTierTwo(tier2)
+                        break
+                    end
+                end
+            end
+        elseif cell.tier == "tier3" then
+            -- Find and remove from tierThreePositions
+            for tier3Idx, tier3 in pairs(self.tierThreePositions) do
+                for _, patternIdx in ipairs(tier3.pattern) do
+                    if patternIdx == idx then
+                        self:clearTierThree(tier3)
+                        break
+                    end
+                end
+            end
+        else
+            -- Basic bubble - just clear it
+            cell.ballType = nil
+            cell.occupied = false
+            cell.tier = nil
+        end
+    end
+end
+
+-- Find valid Tier 2 placement near given position (generous approach)
 function Grid:findValidTierTwoPlacement(centerX, centerY)
-    local candidates = self:findNearestValidCells(centerX, centerY, 10)
+    local candidates = self:findNearestValidCells(centerX, centerY, 20) -- Wider search
+    
+    local bestOptions = {}
     
     for _, candidate in ipairs(candidates) do
         local centerIdx = candidate.idx
@@ -2472,29 +2614,83 @@ function Grid:findValidTierTwoPlacement(centerX, centerY)
         -- Check if we have enough valid neighbors for full 7-cell pattern
         if #neighbors >= 6 then
             local validPattern = {centerIdx}
-            local allValid = true
+            local blockingTowers = {}
+            local canPlace = true
             
-            for _, neighborIdx in ipairs(neighbors) do
-                if self.cells[neighborIdx] and not self.cells[neighborIdx].permanent and not self.cells[neighborIdx].occupied then
-                    validPattern[#validPattern + 1] = neighborIdx
-                else
-                    allValid = false
-                    break
+            -- Check center cell first
+            if self.cells[centerIdx].permanent then
+                canPlace = false
+            elseif self.cells[centerIdx].occupied and self.cells[centerIdx].tier == "tier3" then
+                blockingTowers[#blockingTowers + 1] = centerIdx
+            elseif self.cells[centerIdx].occupied and self.cells[centerIdx].tier == "tier2" then
+                -- Light penalty for same-tier displacement
+                blockingTowers[#blockingTowers + 1] = centerIdx
+            end
+            
+            -- Check all neighbors
+            if canPlace then
+                for _, neighborIdx in ipairs(neighbors) do
+                    if self.cells[neighborIdx] and not self.cells[neighborIdx].permanent then
+                        validPattern[#validPattern + 1] = neighborIdx
+                        -- Allow stomping basic bubbles and Tier 1, track higher tier conflicts
+                        if self.cells[neighborIdx].occupied and self.cells[neighborIdx].tier == "tier3" then
+                            blockingTowers[#blockingTowers + 1] = neighborIdx
+                        elseif self.cells[neighborIdx].occupied and self.cells[neighborIdx].tier == "tier2" then
+                            -- Light penalty for same-tier displacement
+                            blockingTowers[#blockingTowers + 1] = neighborIdx
+                        end
+                    else
+                        canPlace = false
+                        break
+                    end
                 end
             end
             
-            if allValid and #validPattern >= 7 then
-                return centerIdx, validPattern
+            if canPlace and #validPattern >= 7 then
+                -- Calculate distance to preferred position
+                local dx = centerX - candidate.pos.x
+                local dy = centerY - candidate.pos.y
+                local dist = dx * dx + dy * dy
+                
+                -- Calculate penalty for displacing towers (lighter for same-tier)
+                local penalty = 0
+                for _, blockingIdx in ipairs(blockingTowers) do
+                    if self.cells[blockingIdx].tier == "tier3" then
+                        penalty = penalty + 3000  -- Heavy penalty for Tier 3
+                    elseif self.cells[blockingIdx].tier == "tier2" then
+                        penalty = penalty + 500   -- Light penalty for same-tier
+                    end
+                end
+                
+                bestOptions[#bestOptions + 1] = {
+                    centerIdx = centerIdx,
+                    pattern = validPattern,
+                    blockingTowers = blockingTowers,
+                    dist = dist + penalty
+                }
             end
         end
+    end
+    
+    if #bestOptions > 0 then
+        -- Sort by distance (with penalties) and pick best
+        table.sort(bestOptions, function(a, b) return a.dist < b.dist end)
+        local best = bestOptions[1]
+        
+        -- Clear any blocking towers
+        if #best.blockingTowers > 0 then
+            self:clearBlockingTowers(best.blockingTowers)
+        end
+        
+        return best.centerIdx, best.pattern
     end
     
     return nil, nil
 end
 
--- Find valid Tier 3 placement near given position (19-cell pattern)
+-- Find valid Tier 3 placement near given position (generous 19-cell pattern)
 function Grid:findValidTierThreePlacement(centerX, centerY)
-    local candidates = self:findNearestValidCells(centerX, centerY, 30)
+    local candidates = self:findNearestValidCells(centerX, centerY, 40) -- Even wider search
     
     for _, candidate in ipairs(candidates) do
         local centerIdx = candidate.idx
@@ -2570,7 +2766,12 @@ function Grid:placeTierTwo(centerX, centerY, sprite)
     -- Find valid position for full 7-cell pattern
     local centerIdx, pattern = self:findValidTierTwoPlacement(centerX, centerY)
     if not centerIdx then 
-        return 
+        print("WARNING: Could not place Tier 2 tower - finding emergency position")
+        centerIdx, pattern = self:findEmergencyTierTwoPlacement(centerX, centerY)
+        if not centerIdx then
+            print("CRITICAL: Could not place Tier 2 tower at all - tower lost")
+            return 
+        end
     end
     
     local gridPos = self.positions[centerIdx]
@@ -2596,7 +2797,12 @@ function Grid:placeTierThree(centerX, centerY, sprite)
     -- Find valid position for full 19-cell pattern
     local centerIdx, pattern = self:findValidTierThreePlacement(centerX, centerY)
     if not centerIdx then 
-        return 
+        print("WARNING: Could not place Tier 3 tower - finding emergency position")
+        centerIdx, pattern = self:findEmergencyTierThreePlacement(centerX, centerY)
+        if not centerIdx then
+            print("CRITICAL: Could not place Tier 3 tower at all - tower lost")
+            return 
+        end
     end
     
     local gridPos = self.positions[centerIdx]
@@ -2615,6 +2821,151 @@ function Grid:placeTierThree(centerX, centerY, sprite)
     }
     self.isAnimating = true
     
+end
+
+-- Emergency placement for Tier 2 - finds ANY available position by clearing everything
+function Grid:findEmergencyTierTwoPlacement(centerX, centerY)
+    -- Find ANY valid cell, even if far away
+    local allCandidates = self:findNearestValidCells(centerX, centerY, 100) -- Search entire valid area
+    
+    for _, candidate in ipairs(allCandidates) do
+        local centerIdx = candidate.idx
+        local neighbors = self:getNeighbors(centerIdx)
+        
+        if #neighbors >= 6 and not self.cells[centerIdx].permanent then
+            local pattern = {centerIdx}
+            local canPlace = true
+            
+            -- Check all neighbors - only skip permanent boundaries
+            for _, neighborIdx in ipairs(neighbors) do
+                if self.cells[neighborIdx] and not self.cells[neighborIdx].permanent then
+                    pattern[#pattern + 1] = neighborIdx
+                else
+                    canPlace = false
+                    break
+                end
+            end
+            
+            if canPlace and #pattern >= 7 then
+                -- Clear EVERYTHING in the pattern (emergency mode)
+                for _, idx in ipairs(pattern) do
+                    if self.cells[idx].occupied then
+                        self:clearAnyTowerAtIndex(idx)
+                    end
+                end
+                return centerIdx, pattern
+            end
+        end
+    end
+    
+    return nil, nil
+end
+
+-- Emergency placement for Tier 3 - finds ANY available position by clearing everything  
+function Grid:findEmergencyTierThreePlacement(centerX, centerY)
+    -- Find ANY valid cell, even if far away
+    local allCandidates = self:findNearestValidCells(centerX, centerY, 100) -- Search entire valid area
+    
+    for _, candidate in ipairs(allCandidates) do
+        local centerIdx = candidate.idx
+        local neighbors1 = self:getNeighbors(centerIdx)
+        
+        if #neighbors1 >= 6 and not self.cells[centerIdx].permanent then
+            local pattern = {centerIdx}
+            local canPlace = true
+            
+            -- Add first ring - only skip permanent boundaries
+            for _, n1 in ipairs(neighbors1) do
+                if self.cells[n1] and not self.cells[n1].permanent then
+                    pattern[#pattern + 1] = n1
+                else
+                    canPlace = false
+                    break
+                end
+            end
+            
+            -- Add second ring if first ring worked
+            if canPlace and #pattern == 7 then
+                local secondRingCells = {}
+                for _, firstRingIdx in ipairs(neighbors1) do
+                    local secondRing = self:getNeighbors(firstRingIdx)
+                    for _, secondRingIdx in ipairs(secondRing) do
+                        -- Skip if already in pattern
+                        local alreadyInPattern = false
+                        for _, patternIdx in ipairs(pattern) do
+                            if patternIdx == secondRingIdx then
+                                alreadyInPattern = true
+                                break
+                            end
+                        end
+                        
+                        if not alreadyInPattern and self.cells[secondRingIdx] and 
+                           not self.cells[secondRingIdx].permanent then
+                            secondRingCells[#secondRingCells + 1] = secondRingIdx
+                        end
+                    end
+                end
+                
+                -- Add 12 second-ring cells
+                for i = 1, math.min(12, #secondRingCells) do
+                    pattern[#pattern + 1] = secondRingCells[i]
+                end
+                
+                if #pattern >= 19 then
+                    -- Clear EVERYTHING in the pattern (emergency mode)
+                    for _, idx in ipairs(pattern) do
+                        if self.cells[idx].occupied then
+                            self:clearAnyTowerAtIndex(idx)
+                        end
+                    end
+                    return centerIdx, pattern
+                end
+            end
+        end
+    end
+    
+    return nil, nil
+end
+
+-- Clear any tower at a specific index (helper for emergency placement)
+function Grid:clearAnyTowerAtIndex(idx)
+    local cell = self.cells[idx]
+    if cell.tier == "tier1" then
+        -- Find and remove from tierOnePositions
+        for tier1Idx, tier1 in pairs(self.tierOnePositions) do
+            for _, triangleIdx in ipairs(tier1.triangle) do
+                if triangleIdx == idx then
+                    self:clearTierOne(tier1)
+                    return
+                end
+            end
+        end
+    elseif cell.tier == "tier2" then
+        -- Find and remove from tierTwoPositions
+        for tier2Idx, tier2 in pairs(self.tierTwoPositions) do
+            for _, patternIdx in ipairs(tier2.pattern) do
+                if patternIdx == idx then
+                    self:clearTierTwo(tier2)
+                    return
+                end
+            end
+        end
+    elseif cell.tier == "tier3" then
+        -- Find and remove from tierThreePositions
+        for tier3Idx, tier3 in pairs(self.tierThreePositions) do
+            for _, patternIdx in ipairs(tier3.pattern) do
+                if patternIdx == idx then
+                    self:clearTierThree(tier3)
+                    return
+                end
+            end
+        end
+    else
+        -- Basic bubble - just clear it
+        cell.ballType = nil
+        cell.occupied = false
+        cell.tier = nil
+    end
 end
 
 -- Start game over sequence (3 flashes then game over)
@@ -2938,12 +3289,12 @@ function Grid:handleCreepCycle()
         local ammoExhausted = (self.currentShotIndex > #self.ammo)
         
         if ammoExhausted and not self.finaleTriggered then
+            print("DEBUG: Ammo exhausted, triggering finale")
             self.finaleTriggered = true
             self.finaleCountdown = 60  -- 2 second delay before marching starts
         end
         return
     end
-    
     
     -- Random creep spawning based on shot number and dice roll
     local roll = math.random(1, 100)
